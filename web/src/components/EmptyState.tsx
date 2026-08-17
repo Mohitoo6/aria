@@ -60,20 +60,16 @@ export function EmptyState({ onPick }: { onPick: (query: string) => void }) {
         </motion.div>
       </header>
 
-      {/* Epigraph — the closing clause is a luxury a phone can't afford. */}
+      {/* Epigraph — the journal's standing principle, not a feature list. The
+          corpus and the pipeline announce themselves per answer, in the source
+          rail and the instrument row, where a reader can actually check them. */}
       <motion.p
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.7, delay: 0.3, ease }}
-        className="mt-5 text-center font-prose text-[0.94rem] italic leading-[1.7] text-ink-soft sm:mt-8 sm:text-[1.02rem] sm:leading-[1.75]"
+        className="mt-5 text-balance text-center font-prose text-[0.98rem] italic leading-[1.7] text-ink-soft sm:mt-8 sm:text-[1.06rem] sm:leading-[1.75]"
       >
-        Every answer is retrieved, reranked, and adjudicated against{' '}
-        <em className="text-ink">DiPiro&apos;s Pharmacotherapy</em>
-        <span className="hidden sm:inline">
-          {' '}
-          — you read the method and the references, not just the conclusion
-        </span>
-        .
+        Every claim carries its source. Every answer, its reasoning.
       </motion.p>
 
       {/* Saved consults */}
