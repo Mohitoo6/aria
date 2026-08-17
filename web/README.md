@@ -1,10 +1,11 @@
 # ARIA — The Consultation Ledger
 
 A frontend for **ARIA**, an evidence-grounded clinical pharmacotherapy assistant
-(multi-agent RAG over *DiPiro's Pharmacotherapy*). This is the **Consultation
-Ledger** concept: a warm-archival, editorial interface where every answer reads
-like a page from a clinical reference — prose on the left, a live **evidence
-margin** on the right, and the agent reasoning made visible, not hidden.
+(multi-agent RAG over *DiPiro's Pharmacotherapy*). A warm-archival, editorial
+take on a chat interface: the journal typography and the visible agent
+reasoning of a clinical reference, in the rhythm of a conversation — questions
+tucked to the right, ARIA answering in the open, and every claim one tap from
+the passage it was retrieved from.
 
 ## Run it
 
@@ -25,22 +26,31 @@ realistic mock transport so it runs fully standalone.
   colophon draws itself in ink, the title rises off the baseline letter by
   letter, and the cover lifts away into the consultation page (click or press
   any key to skip; respects reduced-motion).
-- **The evidence margin.** Citations aren't `[1]` brackets — they're typographic
-  superscripts that *dock into a side rail* as the answer streams, like footnotes
-  settling into a textbook. Hover a marker → its DiPiro snippet peeks; the matching
-  margin card highlights in sync.
-- **The reasoning trace.** The real LangGraph pipeline (guardrail → navigator →
-  generator → judge) is rendered as a vertical signal chain with a traveling
-  filament and per-node instrument readouts ("248 chunks → 3 reranked", "91%
-  confidence"). It collapses to one ledger line when done, but stays inspectable.
-- **Evidence tier as a first-class object.** A calibrated 3-segment strength mark
-  + roman-numeral stamp + a confidence arc gauge, revealed the moment the Judge
-  returns.
+- **One consultation surface.** The transcript scrolls inside a single framed
+  sheet with the composer docked at its foot, so the app reads as a room you're
+  talking in — not a document that reprints its masthead for every question.
+- **The thinking strip.** The real LangGraph pipeline (guardrail → navigator →
+  generator → judge) opens above the answer as a live signal chain with a
+  traveling filament and per-node readouts ("248 chunks → 3 reranked"), then
+  folds itself into one receipt line — "Reasoned in 4.2s" — that reopens on
+  click. Visible when it matters, silent when it doesn't.
+- **Citations that go somewhere.** Not `[1]` brackets but typographic
+  superscripts: hover peeks at the grounded DiPiro passage, clicking pins it
+  open in the source rail beneath the reply.
+- **Instruments, not furniture.** GRADE certainty, the Judge's confidence arc,
+  and the source count sit in one quiet row under each answer, arriving a beat
+  after the prose lands.
 - **A real point of view.** Bone-paper + warm ink, a single saffron accent, oxblood
   reserved only for caution. Fraunces (display) / Spectral (clinical prose) / IBM
   Plex Mono (instrument labels). Dark mode is a first-class theme, not an invert.
 - **Command palette** (`⌘K`), keyboard-navigable, with seeded consults and
   free-form ask.
+- **One build, phone to desktop.** Not a separate mobile site: the shell sizes
+  itself from the *visual* viewport so an iOS keyboard lifts the composer
+  instead of burying it, the reply gutter collapses so prose keeps the full
+  line on a phone, citation markers skip the hover-peek on touch and open the
+  passage directly, and safe-area insets keep content clear of the notch and
+  home indicator.
 
 ## Architecture
 
@@ -54,8 +64,8 @@ src/
   hooks/
     useConsultation.ts   # owns the transcript, drives streaming
     useTheme.ts / useReducedMotion.ts
-  components/        # Masthead, ReasoningTrace, EvidenceTierMark, SourcesRail,
-                     # CitationMarker, Composer, CommandPalette, EmptyState, …
+  components/        # Masthead, MessageTurn, ThinkingStrip, AnswerMeta,
+                     # SourceRail, CitationMarker, Composer, CommandPalette, …
   styles/tokens.css  # design tokens (light + dark)
 ```
 

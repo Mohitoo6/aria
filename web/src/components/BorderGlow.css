@@ -12,6 +12,8 @@
   isolation: isolate;
   transform: translate3d(0, 0, 0.01px);
   display: grid;
+  /* One track that fills the card and lets its child scroll internally. */
+  grid-template-rows: minmax(0, 1fr);
   border: 1px solid hsl(var(--line) / 0.55);
   background: var(--card-bg, hsl(var(--page)));
   overflow: visible;
@@ -133,6 +135,10 @@
   display: flex;
   flex-direction: column;
   position: relative;
-  overflow: auto;
+  /* The card is the app frame: children own their own scrolling, and the
+     rounded corners clip whatever slides past them. */
+  min-height: 0;
+  overflow: hidden;
+  border-radius: inherit;
   z-index: 1;
 }

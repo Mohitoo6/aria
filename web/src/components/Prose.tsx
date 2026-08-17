@@ -159,22 +159,12 @@ function tokenize(content: string): Block[] {
   return blocks;
 }
 
-export function Prose({
-  content,
-  streaming,
-  variant,
-}: {
-  content: string;
-  streaming?: boolean;
-  variant?: 'paper';
-}) {
+export function Prose({ content, streaming }: { content: string; streaming?: boolean }) {
   const blocks = tokenize(content);
-  const paper = variant === 'paper';
-  let firstParaSeen = false;
   let tableNo = 0;
 
   return (
-    <div className="font-prose text-[1.04rem] leading-[1.74] text-ink-soft">
+    <div className="font-prose text-[0.96rem] leading-[1.68] text-ink-soft sm:text-[1.01rem] sm:leading-[1.75]">
       {blocks.map((b, bi) => {
         switch (b.kind) {
           case 'heading': {
@@ -182,7 +172,7 @@ export function Prose({
               return (
                 <h4
                   key={bi}
-                  className="mb-1.5 mt-6 font-display text-[1.2rem] font-semibold leading-snug tracking-tight2 text-ink first:mt-0"
+                  className="mb-1.5 mt-5 font-display text-[1.1rem] font-semibold leading-snug tracking-tight2 text-ink first:mt-0"
                 >
                   {renderInline(b.text, `h-${bi}`)}
                 </h4>
@@ -225,17 +215,9 @@ export function Prose({
           }
 
           case 'p': {
-            const isFirst = paper && !firstParaSeen;
-            if (isFirst) firstParaSeen = true;
             const isLast = bi === blocks.length - 1;
             return (
-              <p
-                key={bi}
-                lang="en"
-                className={['my-3.5 first:mt-0', paper && 'copy', isFirst && 'dropcap']
-                  .filter(Boolean)
-                  .join(' ')}
-              >
+              <p key={bi} lang="en" className="my-3.5 first:mt-0">
                 {renderInline(b.text, `p-${bi}`)}
                 {streaming && isLast && <Caret />}
               </p>
@@ -297,12 +279,12 @@ function ClinicalTable({
     a === 'right' ? 'text-right' : a === 'center' ? 'text-center' : 'text-left';
 
   return (
-    <figure className="my-6">
-      <figcaption className="sec mb-2 text-ink">Table {number}</figcaption>
-      <div className="overflow-x-auto rule-hair border-b border-rule/50">
-        <table className="w-full border-collapse text-[0.9rem]">
+    <figure className="my-5">
+      <figcaption className="label mb-1.5">Table {number}</figcaption>
+      <div className="overflow-x-auto rounded-[10px] border border-line bg-surface/40">
+        <table className="w-full border-collapse text-[0.88rem]">
           <thead>
-            <tr className="border-b-2 border-rule/50">
+            <tr className="border-b border-line-strong/60 bg-surface/70">
               {table.header.map((h, i) => (
                 <th
                   key={i}

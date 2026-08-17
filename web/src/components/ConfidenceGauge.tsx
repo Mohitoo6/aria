@@ -10,9 +10,11 @@ interface Props {
   value: number; // 0..1
   size?: number;
   animate?: boolean;
+  /** Print the percentage inside the arc. Off for the compact inline gauge. */
+  showValue?: boolean;
 }
 
-export function ConfidenceGauge({ value, size = 46, animate = true }: Props) {
+export function ConfidenceGauge({ value, size = 46, animate = true, showValue = true }: Props) {
   const pct = Math.round(value * 100);
   const r = (size - 6) / 2;
   const cx = size / 2;
@@ -64,9 +66,11 @@ export function ConfidenceGauge({ value, size = 46, animate = true }: Props) {
           transition={{ duration: 0.9, ease: [0.22, 1, 0.36, 1] }}
         />
       </svg>
-      <div className="absolute flex flex-col items-center leading-none">
-        <span className={cn('font-mono text-[0.78rem] font-medium text-ink')}>{pct}</span>
-      </div>
+      {showValue && (
+        <div className="absolute flex flex-col items-center leading-none">
+          <span className={cn('font-mono text-[0.78rem] font-medium text-ink')}>{pct}</span>
+        </div>
+      )}
     </div>
   );
 }

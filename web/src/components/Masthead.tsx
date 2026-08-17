@@ -17,8 +17,8 @@ interface Props {
 
 export function Masthead({ theme, onToggleTheme, onReset, hasConversation, busy }: Props) {
   return (
-    <header className="sticky top-0 z-30 border-b border-rule/30 bg-desk/85 backdrop-blur-md">
-      <div className="mx-auto flex max-w-[62rem] items-center gap-4 px-4 py-2.5 sm:px-6">
+    <header className="pt-safe sticky top-0 z-30 shrink-0 border-b border-rule/30 bg-desk/85 backdrop-blur-md">
+      <div className="mx-auto flex max-w-[62rem] items-center gap-4 px-3 py-2 sm:px-6 sm:py-2.5">
         <div className="flex items-center gap-2 text-ink">
           <Icon name="aria" size={17} className="text-accent" />
           <span className="font-display text-[0.95rem] font-semibold tracking-tight2">ARIA</span>
@@ -55,10 +55,11 @@ export function Masthead({ theme, onToggleTheme, onReset, hasConversation, busy 
               onClick={onReset}
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
-              className="inline-flex items-center gap-1.5 border border-line px-2 py-1 font-mono text-[0.56rem] uppercase tracking-[0.12em] text-ink-soft transition-colors hover:border-line-strong hover:text-ink"
+              whileTap={{ scale: 0.94 }}
+              className="inline-flex h-8 items-center gap-1.5 rounded-full border border-line px-2.5 font-mono text-[0.56rem] uppercase tracking-[0.12em] text-ink-soft transition-colors hover:border-accent/50 hover:text-ink sm:h-7"
             >
               <Icon name="plus" size={12} />
-              <span className="hidden sm:inline">New issue</span>
+              <span className="hidden sm:inline">New consult</span>
             </motion.button>
           )}
 
@@ -66,7 +67,7 @@ export function Masthead({ theme, onToggleTheme, onReset, hasConversation, busy 
             type="button"
             onClick={onToggleTheme}
             aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
-            className="grid h-7 w-7 place-items-center border border-line text-ink-soft transition-colors hover:border-line-strong hover:text-ink"
+            className="grid h-8 w-8 place-items-center rounded-full border border-line text-ink-soft transition-colors hover:border-line-strong hover:text-ink sm:h-7 sm:w-7"
           >
             <motion.span
               key={theme}

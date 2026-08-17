@@ -13,11 +13,15 @@
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
     font-feature-settings: 'kern' 1, 'liga' 1, 'onum' 1;
+    /* Touch devices: no grey flash on tap, no rubber-banding behind the app. */
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior: none;
   }
 
   body {
     @apply bg-desk text-ink font-prose;
     margin: 0;
+    overflow: hidden;
     /* The desk: a quiet woven neutral, no gradient blobs. */
     background-image:
       linear-gradient(hsl(var(--ink) / 0.02) 1px, transparent 1px),
@@ -44,18 +48,77 @@
 }
 
 @layer components {
-  /* The page: a physical sheet of journal stock resting on the desk. */
-  .sheet {
-    @apply bg-page;
-    box-shadow:
-      0 0 0 1px hsl(var(--ink) / 0.07),
-      0 1px 1px hsl(var(--shadow) / 0.04),
-      0 24px 60px -28px hsl(var(--shadow) / 0.4);
-  }
-
   /* Section running head — small, letterspaced caps, journal style. */
   .sec {
     @apply font-mono text-[0.6rem] uppercase tracking-[0.2em] text-ink-faint;
+  }
+
+  /* Micro label — the smallest caps size, used inside chips and popovers. */
+  .label {
+    @apply font-mono text-[0.58rem] uppercase tracking-[0.14em] text-ink-faint;
+  }
+
+  /* A chat-surface chip: quiet by default, warms on hover. */
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-line px-2.5 py-1
+           font-mono text-[0.6rem] uppercase tracking-[0.1em] text-ink-soft transition-all
+           duration-200;
+  }
+  .chip:hover {
+    @apply border-line-strong text-ink;
+  }
+
+  /* The reader's own message — warm, weightless, tucked to the right. */
+  .bubble {
+    box-shadow:
+      0 1px 0 hsl(var(--ink) / 0.03),
+      0 8px 22px -18px hsl(var(--shadow) / 0.5);
+  }
+
+  /* Live status text: a highlight travels left-to-right through the glyphs. */
+  .shimmer {
+    background-image: linear-gradient(
+      100deg,
+      hsl(var(--ink-faint)) 0%,
+      hsl(var(--ink-faint)) 38%,
+      hsl(var(--accent)) 50%,
+      hsl(var(--ink-faint)) 62%,
+      hsl(var(--ink-faint)) 100%
+    );
+    background-size: 250% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: shimmer-sweep 2.6s linear infinite;
+  }
+
+  @keyframes shimmer-sweep {
+    from {
+      background-position: 150% 0;
+    }
+    to {
+      background-position: -150% 0;
+    }
+  }
+
+  /* Edge-to-edge on notched phones without hiding content behind the
+     home indicator or the status bar. */
+  .pb-safe {
+    padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+  }
+  .pt-safe {
+    padding-top: env(safe-area-inset-top);
+  }
+  @media (min-width: 640px) {
+    .pb-safe {
+      padding-bottom: max(1.5rem, env(safe-area-inset-bottom));
+    }
+  }
+
+  /* Softens the top of the transcript as it slides under the header. */
+  .fade-top {
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 28px);
+    mask-image: linear-gradient(to bottom, transparent 0, black 28px);
   }
 
   /* Identifier / metadata text — DOIs, manuscript ids. */
@@ -71,25 +134,6 @@
     border-top: 1px solid hsl(var(--rule) / 0.55);
   }
 
-  /* Justified, hyphenated academic body copy. */
-  .copy {
-    text-align: justify;
-    text-justify: inter-word;
-    hyphens: auto;
-    -webkit-hyphens: auto;
-  }
-
-  /* Drop cap on the first paragraph of an article body. */
-  .dropcap::first-letter {
-    float: left;
-    font-family: 'Fraunces', Georgia, serif;
-    font-weight: 600;
-    font-size: 3.1em;
-    line-height: 0.78;
-    padding: 0.04em 0.09em 0 0;
-    color: hsl(var(--ink));
-  }
-
   /* Superscript citation reference number, journal-set. */
   .supref {
     font-feature-settings: 'sups' 1;
@@ -98,8 +142,8 @@
 
 /* Slim, paper-toned scrollbar. */
 *::-webkit-scrollbar {
-  width: 11px;
-  height: 11px;
+  width: 9px;
+  height: 9px;
 }
 *::-webkit-scrollbar-thumb {
   background: hsl(var(--line-strong) / 0.7);
@@ -110,6 +154,14 @@
 *::-webkit-scrollbar-thumb:hover {
   background: hsl(var(--ink-faint) / 0.85);
   background-clip: content-box;
+}
+
+/* Touch devices get the platform's own overlay indicator instead. */
+@media (pointer: coarse) {
+  *::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

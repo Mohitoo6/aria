@@ -1,172 +1,156 @@
-import { motion } from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
 import type { AssistantMessage, Message, UserMessage } from '../lib/types';
-import { CitationProvider } from './citationContext';
-import { ReasoningTrace } from './ReasoningTrace';
-import { EvidenceLevel } from './EvidenceLevel';
+import { CitationProvider, useCitations } from './citationContext';
+import { ThinkingStrip } from './ThinkingStrip';
+import { SourceRail } from './SourceRail';
+import { AnswerMeta } from './AnswerMeta';
+import { AriaMark } from './AriaMark';
 import { Prose } from './Prose';
-import { References } from './References';
 import { SafetyNotes } from './SafetyNotes';
-import { CopyButton } from './CopyButton';
-import { Icon } from './Icon';
 
-/* A ledger turn typeset as one article: the query is the title, ARIA's
-   grounded response is the article body, with a margin evidence box and a
-   numbered References section. */
+/*
+  A turn in the consultation.
 
-const ROMAN = [
-  '',
-  'I',
-  'II',
-  'III',
-  'IV',
-  'V',
-  'VI',
-  'VII',
-  'VIII',
-  'IX',
-  'X',
-  'XI',
-  'XII',
-];
-const roman = (n: number) => ROMAN[n] ?? String(n);
+  The reader's question is a light bubble tucked to the right; ARIA answers
+  in the open, left-aligned under its mark, the way a colleague writes back.
+  Everything that used to be article furniture — the method box, the margin
+  classification, the bibliography — now lives in the thin strip above the
+  answer and the instrument row below it.
+*/
 
-const fmtDate = (ts: number) =>
-  new Date(ts).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+const ease = [0.22, 1, 0.36, 1] as const;
 
-export function MessageTurn({
-  message,
-  articleNo,
-}: {
-  message: Message;
-  articleNo?: number;
-}) {
+const fmtTime = (ts: number) =>
+  new Date(ts).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+
+export function MessageTurn({ message }: { message: Message }) {
   return message.role === 'user' ? (
-    <UserEntry message={message} articleNo={articleNo} />
+    <UserTurn message={message} />
   ) : (
-    <AssistantEntry message={message} />
+    <AssistantTurn message={message} />
   );
 }
 
-function UserEntry({ message, articleNo }: { message: UserMessage; articleNo?: number }) {
+function UserTurn({ message }: { message: UserMessage }) {
   return (
-    <motion.header
-      initial={{ opacity: 0, y: 6 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
-      className="mt-14 first:mt-0"
+    <motion.div
+      initial={{ opacity: 0, y: 12, scale: 0.985 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{ duration: 0.45, ease }}
+      className="mt-8 flex justify-end first:mt-0 sm:mt-9"
     >
-      {articleNo && articleNo > 1 && <div className="rule-double mb-10 opacity-70" />}
-
-      <div className="text-center">
-        <span className="sec text-accent">
-          Article {articleNo ? roman(articleNo) : ''} · Clinical Query
+      <div className="group flex max-w-[88%] flex-col items-end sm:max-w-[74%]">
+        <div className="bubble rounded-[16px] rounded-br-[5px] border border-accent/25 bg-accent/[0.07] px-3.5 py-2.5 sm:px-4">
+          <p className="whitespace-pre-wrap font-prose text-[0.97rem] leading-[1.6] text-ink sm:text-[1rem]">
+            {message.content}
+          </p>
+        </div>
+        <span className="ident mt-1.5 pr-1 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
+          Asked {fmtTime(message.createdAt)}
         </span>
       </div>
-
-      <h2 className="mx-auto mt-4 max-w-3xl text-balance text-center font-display text-[1.7rem] font-medium leading-[1.18] tracking-tight2 text-ink sm:text-[2.05rem]">
-        {message.content}
-      </h2>
-
-      <div className="mt-4 flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
-        <span className="ident">Received {fmtDate(message.createdAt)}</span>
-        <span className="text-line-strong">·</span>
-        <span className="ident">
-          Manuscript ARIA-{message.id.slice(-4).toUpperCase()}
-        </span>
-        <span className="text-line-strong">·</span>
-        <span className="ident">Retrieval-augmented · adjudicated</span>
-      </div>
-
-      <div className="rule-hair mt-5" />
-    </motion.header>
+    </motion.div>
   );
 }
 
-function AssistantEntry({ message }: { message: AssistantMessage }) {
-  const reasoning = message.phase === 'reasoning';
+function AssistantTurn({ message }: { message: AssistantMessage }) {
   const streaming = message.phase === 'streaming';
   const complete = message.phase === 'complete';
-  const metaReady = (streaming || complete) && message.confidence > 0;
+  const live = !complete;
 
   return (
     <CitationProvider citations={message.citations}>
-      <div className="mt-7 grid grid-cols-1 gap-x-10 gap-y-6 lg:grid-cols-[minmax(0,1fr)_13rem]">
-        {/* Article body */}
-        <div className="min-w-0">
-          {/* Methods box — the reasoning pipeline */}
-          {message.agentSteps.length > 0 && (
-            <figure className="mb-6 border border-line bg-surface/50">
-              <figcaption className="flex items-center gap-2 border-b border-line px-3 py-1.5">
-                <Icon name="navigator" size={12} className="text-ink-faint" />
-                <span className="sec !text-[0.54rem]">Box 1 · Retrieval &amp; adjudication method</span>
-              </figcaption>
-              <div className="px-3 py-3">
-                <ReasoningTrace steps={message.agentSteps} complete={complete} />
-              </div>
-            </figure>
-          )}
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, ease }}
+        className="mt-6 flex gap-3 sm:gap-4"
+      >
+        {/* On a phone the gutter costs a fifth of the line length, so the
+            mark moves inline into the byline instead. */}
+        <div className="sticky top-1 hidden self-start pt-[2px] sm:block">
+          <AriaMark live={live} size={28} />
+        </div>
 
-          {(message.content || metaReady) && (
-            <div className="mb-3 flex items-baseline gap-3">
-              <h3 className="sec !tracking-[0.22em] text-ink">Findings &amp; Recommendation</h3>
-              <span className="h-px flex-1 bg-line" />
+        <div className="min-w-0 flex-1 pb-1">
+          <div className="mb-2 flex items-center gap-2">
+            <span className="sm:hidden">
+              <AriaMark live={live} size={21} />
+            </span>
+            <span className="font-mono text-[0.62rem] uppercase tracking-[0.18em] text-ink">
+              ARIA
+            </span>
+            <span className="ident truncate text-ink-faint/70">
+              {live ? 'consulting the evidence' : 'grounded reply'}
+            </span>
+          </div>
+
+          {message.agentSteps.length > 0 && (
+            <div className="mb-3.5">
+              <ThinkingStrip steps={message.agentSteps} complete={complete} />
             </div>
           )}
 
-          {message.content && <Prose content={message.content} streaming={streaming} variant="paper" />}
+          {message.content ? (
+            <Prose content={message.content} streaming={streaming} />
+          ) : (
+            streaming && <AnswerSkeleton />
+          )}
 
-          {reasoning && !message.content && <ThinkingShimmer />}
-
-          {message.safety && message.safety.length > 0 && complete && (
+          {complete && message.safety && message.safety.length > 0 && (
             <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 0.2 }}
-              className="mt-7"
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.45, delay: 0.12, ease }}
+              className="mt-4"
             >
-              <span className="sec mb-2 block">Clinical notes</span>
               <SafetyNotes notes={message.safety} />
             </motion.div>
           )}
 
-          {complete && message.citations.length > 0 && (
-            <References citations={message.citations} />
-          )}
-
           {complete && message.content && (
-            <div className="rule-hair mt-8 flex items-center gap-3 pt-3">
-              <span className="ident max-w-md">
-                † Decision-support synthesis. Not a substitute for clinical judgment or
-                primary literature.
-              </span>
-              <span className="ml-auto">
-                <CopyButton text={message.content} label="Copy article text" />
-              </span>
-            </div>
+            <>
+              <AnswerMeta message={message} />
+              <RailSlot message={message} />
+            </>
           )}
         </div>
-
-        {/* Margin — evidence classification */}
-        <aside className="lg:sticky lg:top-20 lg:self-start">
-          {metaReady && (
-            <EvidenceLevel tier={message.evidenceTier} confidence={message.confidence} />
-          )}
-        </aside>
-      </div>
+      </motion.div>
     </CitationProvider>
   );
 }
 
-function ThinkingShimmer() {
+/** The rail only mounts once the reader asks for it, so replies stay light. */
+function RailSlot({ message }: { message: AssistantMessage }) {
+  const { railOpen } = useCitations();
   return (
-    <div className="space-y-2.5" aria-hidden>
-      {[100, 94, 97, 72].map((w, i) => (
+    <AnimatePresence initial={false}>
+      {railOpen && (
+        <motion.div
+          key="rail"
+          initial={{ height: 0, opacity: 0 }}
+          animate={{ height: 'auto', opacity: 1 }}
+          exit={{ height: 0, opacity: 0 }}
+          transition={{ duration: 0.32, ease }}
+          className="overflow-hidden"
+        >
+          <SourceRail citations={message.citations} />
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+function AnswerSkeleton() {
+  return (
+    <div className="space-y-2.5 py-1" aria-hidden>
+      {[100, 92, 96, 64].map((w, i) => (
         <motion.div
           key={i}
-          className="h-3 bg-line"
+          className="h-3 rounded-[2px] bg-line"
           style={{ width: `${w}%` }}
-          animate={{ opacity: [0.35, 0.7, 0.35] }}
-          transition={{ duration: 1.6, repeat: Infinity, delay: i * 0.12 }}
+          animate={{ opacity: [0.3, 0.65, 0.3] }}
+          transition={{ duration: 1.5, repeat: Infinity, delay: i * 0.12 }}
         />
       ))}
     </div>

@@ -23,7 +23,7 @@ export function SafetyNotes({ notes }: { notes: SafetyNote[] }) {
           <li
             key={i}
             className={cn(
-              'flex gap-2.5 border-l-2 border-oxblood/50 bg-oxblood/[0.04] py-1.5 pl-2.5 pr-2',
+              'flex gap-2.5 rounded-r-[8px] border-l-2 border-oxblood/50 bg-oxblood/[0.05] py-2 pl-2.5 pr-3',
             )}
           >
             <span className="mt-px text-oxblood/80">

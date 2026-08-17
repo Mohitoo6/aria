@@ -90,16 +90,25 @@ at request time.
 
 ## The web experience
 
-The frontend (React + TypeScript + Vite + Tailwind + Framer Motion) is designed as a
-**clinical research journal**. The app opens on an animated cover page — the ARIA
-colophon draws itself in ink and the cover lifts away into the consultation. Each
-answer is then typeset as a peer-reviewed article: prose on the left, a live
-**evidence margin** on the right, citations that dock into the margin as the answer
-streams, and the four-agent pipeline rendered as a live reasoning trace over
-Server-Sent Events.
+The frontend (React + TypeScript + Vite + Tailwind + Framer Motion) is an editorial
+take on a chat interface — the typography of a **clinical research journal** in the
+rhythm of a conversation. The app opens on an animated cover page: the ARIA colophon
+draws itself in ink and the cover lifts away into the consultation. From there the
+transcript scrolls inside one framed sheet with the composer docked at its foot.
+Above each reply, the four-agent pipeline runs as a live thinking strip that folds
+into a single receipt line when it's done; below it, GRADE certainty, the Judge's
+confidence and the grounded sources sit in one quiet instrument row. Citation
+markers open the exact retrieved passage they rest on.
 
 <div align="center">
 <img src="docs/screenshots/consultation.png" alt="A consultation in progress" width="800"/>
+</div>
+
+The same build serves a phone — the layout adapts rather than shipping a second
+frontend.
+
+<div align="center">
+<img src="docs/screenshots/mobile-light.png" alt="ARIA on a phone" width="260"/>
 </div>
 
 See [`web/README.md`](web/README.md) for the full design notes.
