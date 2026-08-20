@@ -1,4 +1,10 @@
-import type { AgentStep, Citation, EvidenceTier, SafetyNote } from './types';
+import type {
+  AgentStep,
+  Citation,
+  ConsultationError,
+  EvidenceTier,
+  SafetyNote,
+} from './types';
 import { recipeFor, OUT_OF_SCOPE } from './mockData';
 
 /*
@@ -15,12 +21,22 @@ export type ConsultationEvent =
   | { type: 'steps'; steps: AgentStep[] }
   | {
       type: 'meta';
-      evidenceTier: EvidenceTier;
-      confidence: number;
+      /** Null when the Judge could not grade the answer. */
+      evidenceTier: EvidenceTier | null;
+      /** Null when not adjudicated. Never a placeholder number. */
+      confidence: number | null;
       citations: Citation[];
       safety?: SafetyNote[];
     }
+  /**
+   * Answer prose only. The backend must never send a failure on this
+   * channel — tokens are rendered as ARIA's reply and decorated with an
+   * evidence tier, so an error arriving as a token would be presented to a
+   * clinician with the authority of a cited answer.
+   */
   | { type: 'token'; chunk: string }
+  /** A failure. Terminal, and carries no confidence and no citations. */
+  | ({ type: 'error' } & ConsultationError)
   | { type: 'done' };
 
 const wait = (ms: number, signal?: AbortSignal) =>
@@ -160,7 +176,10 @@ async function* mockConsult(
   set('judge', {
     status: 'done',
     durationMs: 700,
-    metric: `${Math.round(recipe.confidence * 100)}% confidence`,
+    metric:
+      recipe.confidence !== null
+        ? `${Math.round(recipe.confidence * 100)}% confidence`
+        : 'not adjudicated',
     detail: 'Answer is faithful to cited sources',
   });
   yield emit();

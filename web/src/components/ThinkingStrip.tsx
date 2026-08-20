@@ -42,6 +42,7 @@ export function ThinkingStrip({ steps, complete }: Props) {
 
   const active = steps.find((s) => s.status === 'active');
   const done = steps.filter((s) => s.status === 'done');
+  const anyFailed = steps.some((s) => s.status === 'failed');
   const elapsed = done.reduce((a, s) => a + (s.durationMs ?? 0), 0);
   const progress = steps.length ? done.length / steps.length : 0;
   const receipt = done.find((s) => s.id === 'navigator')?.metric;
@@ -76,8 +77,9 @@ export function ThinkingStrip({ steps, complete }: Props) {
                   {active ? `${active.label} — ${active.detail}` : 'Opening the consultation'}
                 </span>
               ) : (
-                <span className="text-ink-faint">
-                  Reasoned in {(elapsed / 1000).toFixed(1)}s
+                <span className={anyFailed ? 'text-oxblood/80' : 'text-ink-faint'}>
+                  {anyFailed ? 'Stopped after ' : 'Reasoned in '}
+                  {(elapsed / 1000).toFixed(1)}s
                   {/* The retrieval figures need room a phone doesn't have. */}
                   {receipt && (
                     <span className="hidden text-ink-faint/70 sm:inline"> · {receipt}</span>
@@ -132,6 +134,7 @@ function TraceNode({ step }: { step: AgentStep }) {
   const active = step.status === 'active';
   const isDone = step.status === 'done';
   const skipped = step.status === 'skipped';
+  const isFailed = step.status === 'failed';
 
   return (
     <li className="relative mb-2.5 last:mb-0">
@@ -148,11 +151,14 @@ function TraceNode({ step }: { step: AgentStep }) {
             'relative grid h-[19px] w-[19px] place-items-center rounded-full border bg-page transition-colors',
             active && 'border-accent text-accent',
             isDone && 'border-tier-strong/60 text-tier-strong',
+            isFailed && 'border-oxblood/70 text-oxblood',
             skipped && 'border-line text-ink-faint/60',
             step.status === 'pending' && 'border-line text-ink-faint/70',
           )}
         >
-          {isDone ? (
+          {isFailed ? (
+            <Icon name="close" size={9} strokeWidth={2.4} />
+          ) : isDone ? (
             <motion.span
               initial={{ scale: 0, rotate: -25 }}
               animate={{ scale: 1, rotate: 0 }}
@@ -170,7 +176,13 @@ function TraceNode({ step }: { step: AgentStep }) {
         <span
           className={cn(
             'font-mono text-[0.63rem] uppercase tracking-[0.12em]',
-            active ? 'text-accent' : skipped ? 'text-ink-faint/70' : 'text-ink',
+            active
+              ? 'text-accent'
+              : isFailed
+                ? 'text-oxblood'
+                : skipped
+                  ? 'text-ink-faint/70'
+                  : 'text-ink',
           )}
         >
           {step.label}
@@ -178,12 +190,12 @@ function TraceNode({ step }: { step: AgentStep }) {
         <span
           className={cn(
             'font-prose text-[0.8rem] leading-snug',
-            skipped ? 'text-ink-faint/70' : 'text-ink-soft',
+            isFailed ? 'text-oxblood/90' : skipped ? 'text-ink-faint/70' : 'text-ink-soft',
           )}
         >
           {step.detail}
         </span>
-        {step.metric && (isDone || skipped) && (
+        {step.metric && (isDone || skipped || isFailed) && (
           <motion.span
             initial={{ opacity: 0, x: -4 }}
             animate={{ opacity: 1, x: 0 }}

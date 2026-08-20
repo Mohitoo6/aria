@@ -1,49 +1,48 @@
+"""Embedding model loader. The model ID comes from `llm.config`."""
+
+from __future__ import annotations
+
+import logging
+
 from langchain_huggingface import HuggingFaceEmbeddings
 
-def load_embedding_model(model_name: str = "all-MiniLM-L6-v2"):
+from llm.config import embedding_model
 
-    print(f"Loading embedding model : {model_name}")
-    print(f"It amy take some time to download from the internet")
+logger = logging.getLogger(__name__)
 
+__all__ = ["get_embeddings_for_text", "load_embedding_model"]
+
+
+def load_embedding_model(model_name: str | None = None) -> HuggingFaceEmbeddings:
+    """Load the sentence-transformers embedding model.
+
+    Args:
+        model_name: override the configured model. Defaults to
+            ARIA_EMBEDDING_MODEL / `all-MiniLM-L6-v2`.
+    """
+    name = model_name or embedding_model()
+    logger.info("Loading embedding model: %s (may download on first run)", name)
     embeddings = HuggingFaceEmbeddings(
-        model_name = model_name,
-        model_kwargs = {"device": "cpu"},
-        encode_kwargs = {"normalize_embeddings": True}
+        model_name=name,
+        model_kwargs={"device": "cpu"},
+        encode_kwargs={"normalize_embeddings": True},
     )
-
-    print (f"Embedding model is ready")
+    logger.info("Embedding model ready")
     return embeddings
 
-def get_embeddings_for_text (text: str, embeddings_model):
 
-    embeddings = embeddings_model.embed_query (text)
- 
-    print(f" \nText = '{text}'")
-    print(f" Embedding size : {len(embeddings)} numbers")
-    print(f"First 5 numbers: {embeddings[:5]}")
-    
-    return embeddings
+def get_embeddings_for_text(text: str, embeddings_model: HuggingFaceEmbeddings) -> list[float]:
+    """Embed a single string. Kept for interactive inspection of the store."""
+    vector: list[float] = embeddings_model.embed_query(text)
+    logger.info("embedded %r -> %d dimensions", text, len(vector))
+    return vector
+
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     model = load_embedding_model()
-
-    texts = [
-        "AI chips demand increased",
-        "GPU sales went up",
-        "Cricket match was exciting"
-    ]
-
-    embeddings = []
-
-    for text in texts:
-        emb = get_embeddings_for_text(text, model)
-        embeddings.append(emb)
-
-    print (f"-----------similarity_check-----------")
-    print (f" AI Chips and GPU Similarity")
-
-    similarity = sum (a * b for a, b in zip (embeddings [0], embeddings [1]))
-    print(f"similarity score : {similarity : .4f}")
-    
-    similarity_2= sum (a * b for a, b in zip (embeddings [0], embeddings [2]))
-    print(f"similarity score : {similarity_2 : .4f}")
+    a = get_embeddings_for_text("AI chips demand increased", model)
+    b = get_embeddings_for_text("GPU sales went up", model)
+    c = get_embeddings_for_text("Cricket match was exciting", model)
+    print(f"AI/GPU similarity     : {sum(x * y for x, y in zip(a, b, strict=True)):.4f}")
+    print(f"AI/cricket similarity : {sum(x * y for x, y in zip(a, c, strict=True)):.4f}")

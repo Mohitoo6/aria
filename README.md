@@ -71,8 +71,15 @@ A LangGraph state machine routes every query through four specialised agents:
 |---|---|
 | **Guardrail** | Classifies whether the query is within clinical scope; everything else is refused before any retrieval happens. |
 | **Navigator** | Rewrites the question into an optimised medical search query, performs **source-balanced retrieval** (a global candidate set plus a guaranteed RxPrep set via metadata filter, so the smaller book is never drowned out), then keeps only the most relevant passages via cross-encoder reranking. |
-| **Generator** | Synthesises the answer from the retrieved passages only (Llama 3.3 70B via Groq), keeping every response traceable to the source texts. |
-| **Judge** | Independently scores the draft for groundedness and relevance. Low-confidence answers are regenerated; the score surfaces in the UI as a confidence gauge and evidence tier. |
+| **Generator** | Synthesises the answer from the retrieved passages only (`openai/gpt-oss-120b` via Groq), keeping every response traceable to the source texts. |
+| **Judge** | Independently scores the draft for groundedness and relevance. Low-confidence answers are regenerated; the score surfaces in the UI as a confidence gauge and evidence tier. When the Judge cannot score an answer, the UI shows **Not adjudicated** rather than a placeholder number. |
+
+Each agent's model is configured by role in `llm/config.py` — the generator
+gets the larger model, while the guardrail, query rewrite and judge run on
+`openai/gpt-oss-20b`. Nothing is hardcoded: every ID is overridable via an
+`ARIA_*_MODEL` environment variable, validated against the provider's live
+model list at startup, and backed by an automatic fallback if a model is
+decommissioned mid-flight.
 
 ## Retrieval stack
 
@@ -122,7 +129,7 @@ aria/
 ├── evals/               # Evaluation suite (guardrail, retrieval, answer quality)
 ├── graph/               # LangGraph pipeline: state, nodes, routing
 ├── ingestion/           # PDF loading, OCR, cleaning, chunking, embedding
-├── llm/                 # LLM setup (Groq), prompts, answer generator
+├── llm/                 # Model config, preflight, prompts, answer generator
 ├── retrieval/           # Retriever + source-balanced Cohere reranking
 ├── vectorstore/         # Qdrant Cloud store loader
 ├── web/                 # React frontend (journal UI)

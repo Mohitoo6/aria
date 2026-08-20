@@ -1,10 +1,24 @@
-from llm.llm_setup import get_llm
+"""
+Guardrail agent — decides whether a query is in clinical scope.
 
+A provider failure here is never treated as "in scope". The previous
+behaviour of defaulting to allow on error meant a dead LLM silently
+disabled the scope filter; now the failure propagates and the consultation
+stops with an explicit error state.
+"""
 
-def check_guardrail(query: str) -> bool:
-    llm = get_llm (temperature = 0)
+from __future__ import annotations
 
-    prompt = f"""You are a guardrail for a medical chatbot based on a pharmacology textbook.
+import logging
+
+from llm.config import Role
+from llm.llm_setup import invoke_role
+
+logger = logging.getLogger(__name__)
+
+__all__ = ["check_guardrail"]
+
+GUARDRAIL_PROMPT = """You are a guardrail for a medical chatbot based on a pharmacology textbook.
 
 Your job: Decide if the user's question is related to medicine, pharmacology, diseases, drugs, treatments, or health.
 
@@ -16,15 +30,24 @@ User question: {query}
 
 Answer (YES or NO):"""
 
-    response = llm.invoke(prompt)
-    decision = response.content.strip().upper()
 
-    print (f"Guardrail check : '{query}'->{decision}")
+def check_guardrail(query: str) -> bool:
+    """Return True when `query` is a medical/pharmacology question.
 
-    return "YES" in decision
+    Raises:
+        AriaLLMError: if the guardrail model cannot be reached. Callers must
+            not interpret this as a pass — an unanswerable guardrail means
+            the consultation cannot safely proceed.
+    """
+    reply = invoke_role(Role.GUARDRAIL, GUARDRAIL_PROMPT.format(query=query))
+    decision = reply.strip().upper()
+    is_medical = "YES" in decision
+    logger.info("Guardrail check: %r -> %s", query, decision)
+    return is_medical
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     test_queries = [
         "what is hypertension?",
         "Tell me about metformin",
@@ -32,14 +55,10 @@ if __name__ == "__main__":
         "What is the capital of France?",
         "Why is the sky blue?",
         "How to cure a cold?",
-        "What is the weather today?"
+        "What is the weather today?",
     ]
 
-    print (f"\nTesting guardrail:")
+    print("\nTesting guardrail:")
     for q in test_queries:
-        is_medical = check_guardrail(q)
-        status = "ALLOWED" if is_medical else "REJECTED"
-        print(f"{status}: {q}\n")
-
-        
-    
+        status = "ALLOWED" if check_guardrail(q) else "REJECTED"
+        print(f"{status}: {q}")

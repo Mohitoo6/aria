@@ -6,7 +6,13 @@ import { uid } from '../lib/utils';
 /**
  * Owns the conversation transcript and drives the streaming pipeline.
  * Consumes the transport's event stream and incrementally builds the
- * active assistant message (reasoning → streaming → complete).
+ * active assistant message (reasoning → streaming → complete | failed).
+ *
+ * One invariant governs this hook: a turn's evidence tier and confidence
+ * stay null until a `meta` event supplies real, Judge-derived values. They
+ * are never seeded with plausible-looking defaults, because the UI renders
+ * them as clinical certainty claims — a seeded 'moderate' is what stamped
+ * "MODERATE CERTAINTY" onto provider error text.
  */
 export function useConsultation(reducedMotion: boolean) {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -39,8 +45,9 @@ export function useConsultation(reducedMotion: boolean) {
         id: assistantId,
         role: 'assistant',
         content: '',
-        evidenceTier: 'moderate',
-        confidence: 0,
+        // Null, not 'moderate' — nothing has been graded yet.
+        evidenceTier: null,
+        confidence: null,
         citations: [],
         agentSteps: [],
         createdAt: Date.now(),
@@ -51,6 +58,7 @@ export function useConsultation(reducedMotion: boolean) {
       setBusy(true);
 
       let buffer = '';
+      let failed = false;
       try {
         for await (const ev of consult(q, {
           speed: reducedMotion ? 0 : 1,
@@ -73,18 +81,44 @@ export function useConsultation(reducedMotion: boolean) {
               buffer += ev.chunk;
               patchAssistant(assistantId, { content: buffer });
               break;
+            case 'error':
+              // Terminal. Drop anything already streamed and strip every
+              // credibility marker: an error is not a partial answer.
+              failed = true;
+              buffer = '';
+              patchAssistant(assistantId, {
+                phase: 'failed',
+                content: '',
+                evidenceTier: null,
+                confidence: null,
+                citations: [],
+                safety: undefined,
+                error: { stage: ev.stage, code: ev.code, message: ev.message },
+              });
+              break;
             case 'done':
-              patchAssistant(assistantId, { phase: 'complete' });
+              if (!failed) patchAssistant(assistantId, { phase: 'complete' });
               break;
           }
         }
       } catch (err) {
         if ((err as DOMException)?.name !== 'AbortError') {
+          // A transport failure is a failure too. Previously this wrote a
+          // sentence into `content` and marked the turn complete, which the
+          // UI then decorated as a graded reply.
           patchAssistant(assistantId, {
-            phase: 'complete',
-            content:
-              buffer ||
-              'The consultation was interrupted before ARIA could respond. Please try again.',
+            phase: 'failed',
+            content: '',
+            evidenceTier: null,
+            confidence: null,
+            citations: [],
+            safety: undefined,
+            error: {
+              stage: 'transport',
+              code: 'unreachable',
+              message:
+                'The consultation was interrupted before ARIA could respond. No clinical content was generated.',
+            },
           });
         }
       } finally {
@@ -103,7 +137,9 @@ export function useConsultation(reducedMotion: boolean) {
     setBusy(false);
     setMessages((prev) =>
       prev.map((m) =>
-        m.role === 'assistant' && m.phase !== 'complete' ? { ...m, phase: 'complete' } : m,
+        m.role === 'assistant' && m.phase !== 'complete' && m.phase !== 'failed'
+          ? { ...m, phase: 'complete' }
+          : m,
       ),
     );
   }, []);

@@ -6,7 +6,9 @@ import { SourceRail } from './SourceRail';
 import { AnswerMeta } from './AnswerMeta';
 import { AriaMark } from './AriaMark';
 import { Prose } from './Prose';
+import { cn } from '../lib/utils';
 import { SafetyNotes } from './SafetyNotes';
+import { ErrorNotice } from './ErrorNotice';
 
 /*
   A turn in the consultation.
@@ -55,8 +57,9 @@ function UserTurn({ message }: { message: UserMessage }) {
 
 function AssistantTurn({ message }: { message: AssistantMessage }) {
   const streaming = message.phase === 'streaming';
+  const failed = message.phase === 'failed';
   const complete = message.phase === 'complete';
-  const live = !complete;
+  const live = !complete && !failed;
 
   return (
     <CitationProvider citations={message.citations}>
@@ -80,24 +83,39 @@ function AssistantTurn({ message }: { message: AssistantMessage }) {
             <span className="font-mono text-[0.62rem] uppercase tracking-[0.18em] text-ink">
               ARIA
             </span>
-            <span className="ident truncate text-ink-faint/70">
-              {live ? 'consulting the evidence' : 'grounded reply'}
+            <span
+              className={cn(
+                'ident truncate',
+                failed ? 'text-oxblood/90' : 'text-ink-faint/70',
+              )}
+            >
+              {/* "grounded reply" is a claim about provenance. It is only
+                  earned by a turn that actually produced grounded content. */}
+              {live
+                ? 'consulting the evidence'
+                : failed
+                  ? 'no answer produced'
+                  : 'grounded reply'}
             </span>
           </div>
 
           {message.agentSteps.length > 0 && (
             <div className="mb-3.5">
-              <ThinkingStrip steps={message.agentSteps} complete={complete} />
+              <ThinkingStrip steps={message.agentSteps} complete={complete || failed} />
             </div>
           )}
 
-          {message.content ? (
+          {/* A failed turn renders the fault and nothing else — no Prose,
+              no safety notes, no instrument row, no source rail. */}
+          {failed && message.error ? (
+            <ErrorNotice error={message.error} />
+          ) : message.content ? (
             <Prose content={message.content} streaming={streaming} />
           ) : (
             streaming && <AnswerSkeleton />
           )}
 
-          {complete && message.safety && message.safety.length > 0 && (
+          {complete && !failed && message.safety && message.safety.length > 0 && (
             <motion.div
               initial={{ opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
@@ -108,7 +126,7 @@ function AssistantTurn({ message }: { message: AssistantMessage }) {
             </motion.div>
           )}
 
-          {complete && message.content && (
+          {complete && !failed && message.content && (
             <>
               <AnswerMeta message={message} />
               <RailSlot message={message} />

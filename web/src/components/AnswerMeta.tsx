@@ -24,8 +24,17 @@ const item = {
 
 export function AnswerMeta({ message }: { message: AssistantMessage }) {
   const { railOpen, setRailOpen } = useCitations();
-  const meta = tierOf(message.evidenceTier);
   const count = message.citations.length;
+
+  // Last line of defence. A failed turn must never reach this component,
+  // but if one ever does, it leaves without a certainty claim attached.
+  if (message.phase === 'failed') return null;
+
+  // `null` tier means the Judge never graded this answer. Render the row
+  // without a GRADE chip rather than inventing one — the answer and its
+  // citations are real, only the adjudication is missing.
+  const meta = message.evidenceTier ? tierOf(message.evidenceTier) : null;
+  const adjudicated = message.confidence !== null;
 
   return (
     <motion.div
@@ -34,41 +43,53 @@ export function AnswerMeta({ message }: { message: AssistantMessage }) {
       variants={{ show: { transition: { staggerChildren: 0.06, delayChildren: 0.1 } } }}
       className="mt-5 flex flex-wrap items-center gap-x-2 gap-y-2 border-t border-line/70 pt-3"
     >
-      {/* GRADE certainty */}
-      <motion.span variants={item} className="group relative">
-        <span className="chip !cursor-default gap-2">
-          <span className="flex items-end gap-[2px]" aria-hidden>
-            {[0, 1, 2].map((i) => (
-              <motion.span
-                key={i}
-                initial={{ scaleY: 0.15 }}
-                animate={{ scaleY: 1 }}
-                transition={{ delay: 0.15 + i * 0.07, duration: 0.35, ease }}
-                style={{ originY: 1 }}
-                className={cn(
-                  'w-[3px] rounded-[1px]',
-                  i < meta.segments ? meta.tint : 'bg-line-strong/60',
-                  i === 0 && 'h-1.5',
-                  i === 1 && 'h-2.5',
-                  i === 2 && 'h-3.5',
-                )}
-              />
-            ))}
-          </span>
-          <span className={meta.color}>{meta.label}</span>
-        </span>
-        <Tip>{meta.gloss}</Tip>
-      </motion.span>
-
-      {/* Judge score */}
-      {message.confidence > 0 && (
+      {/* GRADE certainty — only when the Judge actually graded the answer */}
+      {meta && (
         <motion.span variants={item} className="group relative">
-          <span className="chip !cursor-default gap-2 !py-0.5 !pl-1">
-            <ConfidenceGauge value={message.confidence} size={20} showValue={false} />
-            <span className="tabular-nums text-ink">{message.confidence.toFixed(2)}</span>
-            <span className="text-ink-faint">judge</span>
+          <span className="chip !cursor-default gap-2">
+            <span className="flex items-end gap-[2px]" aria-hidden>
+              {[0, 1, 2].map((i) => (
+                <motion.span
+                  key={i}
+                  initial={{ scaleY: 0.15 }}
+                  animate={{ scaleY: 1 }}
+                  transition={{ delay: 0.15 + i * 0.07, duration: 0.35, ease }}
+                  style={{ originY: 1 }}
+                  className={cn(
+                    'w-[3px] rounded-[1px]',
+                    i < meta.segments ? meta.tint : 'bg-line-strong/60',
+                    i === 0 && 'h-1.5',
+                    i === 1 && 'h-2.5',
+                    i === 2 && 'h-3.5',
+                  )}
+                />
+              ))}
+            </span>
+            <span className={meta.color}>{meta.label}</span>
           </span>
-          <Tip>Independently adjudicated for groundedness and relevance</Tip>
+          <Tip>{meta.gloss}</Tip>
+        </motion.span>
+      )}
+
+      {/* Judge score, or an explicit statement that there isn't one */}
+      {adjudicated && message.confidence !== null ? (
+        message.confidence > 0 && (
+          <motion.span variants={item} className="group relative">
+            <span className="chip !cursor-default gap-2 !py-0.5 !pl-1">
+              <ConfidenceGauge value={message.confidence} size={20} showValue={false} />
+              <span className="tabular-nums text-ink">{message.confidence.toFixed(2)}</span>
+              <span className="text-ink-faint">judge</span>
+            </span>
+            <Tip>Independently adjudicated for groundedness and relevance</Tip>
+          </motion.span>
+        )
+      ) : (
+        <motion.span variants={item} className="group relative">
+          <span className="chip !cursor-default gap-2 !border-oxblood/40 !text-oxblood">
+            <Icon name="caution" size={11} />
+            <span>Not adjudicated</span>
+          </span>
+          <Tip>The Judge was unavailable — this answer carries no confidence score</Tip>
         </motion.span>
       )}
 

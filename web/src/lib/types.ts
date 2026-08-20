@@ -17,7 +17,7 @@ export type EvidenceTier = 'strong' | 'moderate' | 'limited';
 /** The four real nodes of the ARIA graph. */
 export type AgentId = 'guardrail' | 'navigator' | 'generator' | 'judge';
 
-export type AgentStatus = 'pending' | 'active' | 'done' | 'skipped';
+export type AgentStatus = 'pending' | 'active' | 'done' | 'skipped' | 'failed';
 
 export interface AgentStep {
   id: AgentId;
@@ -50,6 +50,20 @@ export interface Citation {
   tier: EvidenceTier;
 }
 
+/**
+ * A provider/LLM failure. Its presence is what tells the UI that this turn
+ * produced NO clinical content — so no evidence tier, no confidence gauge,
+ * no citations and no "grounded reply" byline may be rendered for it.
+ */
+export interface ConsultationError {
+  /** Which pipeline stage failed, e.g. "generator". */
+  stage: string;
+  /** Provider error code, e.g. "model_not_found". */
+  code: string;
+  /** Reader-facing sentence. Never answer-shaped. */
+  message: string;
+}
+
 /** Soft scope/safety note. Present but never alarmist. */
 export interface SafetyNote {
   kind: 'scope' | 'caution' | 'interaction';
@@ -71,15 +85,23 @@ export interface AssistantMessage {
    * `[[n]]` and resolved against `citations` by marker number.
    */
   content: string;
-  evidenceTier: EvidenceTier;
-  /** Judge confidence, 0..1. */
-  confidence: number;
+  /**
+   * Null until the Judge has actually graded the answer. It must never be
+   * seeded with a placeholder tier: a non-null value here is rendered as a
+   * GRADE certainty badge, so a default of 'moderate' put a
+   * "MODERATE CERTAINTY" stamp on ungraded text — including error text.
+   */
+  evidenceTier: EvidenceTier | null;
+  /** Judge confidence, 0..1. Null means "not adjudicated" — never 0.5. */
+  confidence: number | null;
   citations: Citation[];
   agentSteps: AgentStep[];
   safety?: SafetyNote[];
   createdAt: number;
-  /** Streaming lifecycle for the UI. */
-  phase: 'reasoning' | 'streaming' | 'complete';
+  /** Streaming lifecycle for the UI. `failed` is terminal and answer-free. */
+  phase: 'reasoning' | 'streaming' | 'complete' | 'failed';
+  /** Set only when the turn failed. Mutually exclusive with real content. */
+  error?: ConsultationError;
 }
 
 export type Message = UserMessage | AssistantMessage;
