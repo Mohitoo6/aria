@@ -3,7 +3,8 @@ Groq client construction and invocation.
 ------------------------------------------------------------------
 `get_llm` builds a client for a *role*; `invoke_role` runs a prompt through
 it and guarantees one of two outcomes — clean text, or an `AriaLLMError`.
-It never returns an error string as if it were model output.
+It never returns an error string as if it were model output. `stream_role`
+is the same contract, incrementally.
 
 Fallback (step 6): if a role's primary model reports `model_not_found` or
 `model_decommissioned`, the call is retried once against
@@ -15,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Iterator
 from typing import Any
 
 from dotenv import load_dotenv
@@ -28,7 +30,7 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["build_llm", "get_llm", "invoke_role"]
+__all__ = ["build_llm", "get_llm", "invoke_role", "stream_role"]
 
 
 def build_llm(spec: ModelSpec) -> ChatGroq:
@@ -75,6 +77,29 @@ def _invoke_once(llm: ChatGroq, prompt: str) -> str:
     return _as_text(message.content)
 
 
+def _stream_once(llm: ChatGroq, prompt: str) -> Iterator[str]:
+    """Yield text fragments as the model produces them.
+
+    Empty fragments are dropped: Groq emits them while reasoning, and they
+    would otherwise reach the browser as meaningless token events.
+    """
+    for chunk in llm.stream(prompt):
+        text = _as_text(chunk.content)
+        if text:
+            yield text
+
+
+def _fallback_spec(spec: ModelSpec, model: str) -> ModelSpec:
+    return ModelSpec(
+        role=spec.role,
+        model=model,
+        temperature=spec.temperature,
+        max_tokens=spec.max_tokens,
+        reasoning_effort=spec.reasoning_effort,
+        env_var=spec.env_var,
+    )
+
+
 def invoke_role(role: Role, prompt: str) -> str:
     """Run `prompt` for `role` and return the model's text.
 
@@ -105,29 +130,78 @@ def invoke_role(role: Role, prompt: str) -> str:
         )
         raise primary_error
 
-    logger.warning(
-        "Model %r is unavailable (code=%s) for role %r — falling back to %r. "
-        "Set %s to a live model ID to silence this.",
-        spec.model,
-        primary_error.code,
-        role.value,
-        secondary,
-        spec.env_var,
-    )
-    fallback_spec = ModelSpec(
-        role=spec.role,
-        model=secondary,
-        temperature=spec.temperature,
-        max_tokens=spec.max_tokens,
-        reasoning_effort=spec.reasoning_effort,
-        env_var=spec.env_var,
-    )
+    _warn_falling_back(spec, role, primary_error.code, secondary)
     try:
-        return _invoke_once(build_llm(fallback_spec), prompt)
+        return _invoke_once(build_llm(_fallback_spec(spec, secondary)), prompt)
     except Exception as exc:  # noqa: BLE001 - normalised immediately below
         fallback_error = wrap_provider_error(exc, role.value, secondary)
         logger.error(
             "Fallback model %r also failed for role %r (code=%s)",
+            secondary,
+            role.value,
+            fallback_error.code,
+        )
+        raise fallback_error from primary_error
+
+
+def _warn_falling_back(spec: ModelSpec, role: Role, code: str | None, secondary: str) -> None:
+    logger.warning(
+        "Model %r is unavailable (code=%s) for role %r — falling back to %r. "
+        "Set %s to a live model ID to silence this.",
+        spec.model,
+        code,
+        role.value,
+        secondary,
+        spec.env_var,
+    )
+
+
+def stream_role(role: Role, prompt: str) -> Iterator[str]:
+    """Stream `prompt` for `role`, yielding text as the model writes it.
+
+    Same guarantee as `invoke_role`: real model text, or `AriaLLMError`.
+
+    The fallback model is only attempted when the primary fails *before*
+    producing anything. Once a fragment has been handed to the caller it may
+    already be on the reader's screen, and restarting on another model would
+    splice two different answers together mid-sentence. A mid-stream failure
+    therefore raises, and the caller discards what it has — which is what the
+    UI's `error` state does.
+
+    Raises:
+        AriaLLMError: on any provider failure, including after the fallback.
+    """
+    spec = spec_for(role)
+    emitted = False
+    try:
+        for piece in _stream_once(build_llm(spec), prompt):
+            emitted = True
+            yield piece
+        return
+    except Exception as exc:  # noqa: BLE001 - normalised immediately below
+        primary_error = wrap_provider_error(exc, role.value, spec.model)
+
+    if not isinstance(primary_error, AriaLLMError):
+        raise primary_error
+
+    secondary = fallback_model()
+    if emitted or not primary_error.is_dead_model or secondary == spec.model:
+        logger.error(
+            "%s stream failed on %s (code=%s, partial=%s)",
+            role.value,
+            spec.model,
+            primary_error.code,
+            emitted,
+        )
+        raise primary_error
+
+    _warn_falling_back(spec, role, primary_error.code, secondary)
+    try:
+        yield from _stream_once(build_llm(_fallback_spec(spec, secondary)), prompt)
+    except Exception as exc:  # noqa: BLE001 - normalised immediately below
+        fallback_error = wrap_provider_error(exc, role.value, secondary)
+        logger.error(
+            "Fallback model %r also failed while streaming for role %r (code=%s)",
             secondary,
             role.value,
             fallback_error.code,

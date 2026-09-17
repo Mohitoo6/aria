@@ -17,6 +17,7 @@ do that, so an empty retrieval is raised as a failure.
 from __future__ import annotations
 
 import logging
+import threading
 from typing import TYPE_CHECKING, Any
 
 from llm.config import Role
@@ -49,7 +50,13 @@ Optimized query:"""
 
 # Built once and reused: creating it loads the embedding model and opens
 # the Qdrant connection, which is far too slow to repeat per query.
+#
+# The lock matters because the API runs this in a worker thread: without it,
+# concurrent first requests each saw `_retriever is None` and each loaded
+# their own copy of the embedding model, which on a cpu-basic Space means
+# several hundred MB and a stall for every one of them.
 _retriever: BalancedRetriever | None = None
+_retriever_lock = threading.Lock()
 
 
 def optimize_query(query: str) -> str:
@@ -74,6 +81,27 @@ def optimize_query(query: str) -> str:
     logger.info("original : %s", query)
     logger.info("optimized : %s", optimized)
     return optimized
+
+
+def _get_retriever() -> BalancedRetriever:
+    """The shared retriever, built at most once across threads.
+
+    Raises:
+        AriaRetrievalError: if the evidence base cannot be opened. `_retriever`
+            is left unset so a later request retries, rather than latching the
+            process into a permanently broken state.
+    """
+    global _retriever
+    if _retriever is not None:
+        return _retriever
+    with _retriever_lock:
+        if _retriever is None:  # another thread may have won the race
+            try:
+                _retriever = get_balanced_retriever()
+            except Exception as exc:
+                logger.error("could not open the evidence base: %s", exc)
+                raise wrap_retrieval_error(exc, "navigator", collection_name()) from exc
+    return _retriever
 
 
 def navigator(query: str) -> list[Any]:

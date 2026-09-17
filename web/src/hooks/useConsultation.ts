@@ -59,6 +59,7 @@ export function useConsultation(reducedMotion: boolean) {
 
       let buffer = '';
       let failed = false;
+      let streamingStarted = false;
       try {
         for await (const ev of consult(q, {
           speed: reducedMotion ? 0 : 1,
@@ -69,21 +70,34 @@ export function useConsultation(reducedMotion: boolean) {
               patchAssistant(assistantId, { agentSteps: ev.steps });
               break;
             case 'meta':
+              // Arrives after the prose: the Judge can only score a
+              // finished answer. The gauge and the source rail render on a
+              // completed turn, so nothing is shown ungraded in between.
               patchAssistant(assistantId, {
                 evidenceTier: ev.evidenceTier,
                 confidence: ev.confidence,
                 citations: ev.citations,
                 safety: ev.safety,
-                phase: 'streaming',
               });
               break;
             case 'token':
+              // The first fragment is what puts the turn into `streaming`.
+              // It used to be the `meta` event, which arrived before the
+              // prose only because the prose was replayed from a finished
+              // answer. Now the answer streams as it is written and `meta`
+              // comes last — keyed off `meta`, the caret never appeared.
               buffer += ev.chunk;
-              patchAssistant(assistantId, { content: buffer });
+              patchAssistant(assistantId, {
+                content: buffer,
+                ...(streamingStarted ? {} : { phase: 'streaming' as const }),
+              });
+              streamingStarted = true;
               break;
             case 'error':
               // Terminal. Drop anything already streamed and strip every
-              // credibility marker: an error is not a partial answer.
+              // credibility marker: an error is not a partial answer. This
+              // matters more now that prose streams — a failure part-way
+              // through leaves half an answer on screen, and it goes.
               failed = true;
               buffer = '';
               patchAssistant(assistantId, {

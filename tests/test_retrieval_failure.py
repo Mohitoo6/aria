@@ -30,10 +30,6 @@ from llm.errors import (
 )
 
 
-async def _no_sleep(_: float) -> None:
-    return None
-
-
 async def collect(
     query: str = "What is first-line therapy for hypertension?",
 ) -> list[dict[str, Any]]:
@@ -140,9 +136,8 @@ async def test_dead_vector_store_streams_a_retrieval_error(
     def dead(q: str) -> list[Any]:
         raise ConnectionResetError(54, "Connection reset by peer")
 
-    monkeypatch.setattr("api.server.check_guardrail", lambda q: True)
-    monkeypatch.setattr("api.server.navigator", dead)
-    monkeypatch.setattr("api.server.asyncio.sleep", _no_sleep)
+    monkeypatch.setattr("graph.nodes.check_guardrail", lambda q: True)
+    monkeypatch.setattr("graph.nodes.navigator", dead)
 
     events = await collect()
     kinds = types_of(events)
@@ -163,9 +158,8 @@ async def test_empty_retrieval_never_reaches_the_reader_as_an_answer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An un-restored (empty) collection must fail, not produce prose."""
-    monkeypatch.setattr("api.server.check_guardrail", lambda q: True)
-    monkeypatch.setattr("api.server.navigator", lambda q: [])
-    monkeypatch.setattr("api.server.asyncio.sleep", _no_sleep)
+    monkeypatch.setattr("graph.nodes.check_guardrail", lambda q: True)
+    monkeypatch.setattr("graph.nodes.navigator", lambda q: [])
 
     events = await collect()
     kinds = types_of(events)

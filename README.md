@@ -63,16 +63,26 @@ A LangGraph state machine routes every query through four specialised agents:
                  │   Judge    │  scores groundedness + relevance (0–1)
                  └─────┬──────┘
                        │
-        confidence ≥ 0.7 ──► final answer (with citations & confidence)
-        confidence < 0.7 ──► regenerate (up to 3 attempts)
+                  final answer (with citations & confidence)
 ```
+
+This graph is the pipeline — there is not a second copy of it. The API server
+drives the compiled graph and translates its events into SSE; it holds no
+agent order, routing or failure policy of its own. Each node also narrates
+its own progress, so the agent trace the reader watches is emitted by the
+code that actually ran.
 
 | Agent | Role |
 |---|---|
 | **Guardrail** | Classifies whether the query is within clinical scope; everything else is refused before any retrieval happens. |
 | **Navigator** | Rewrites the question into an optimised medical search query, performs **source-balanced retrieval** (a global candidate set plus a guaranteed RxPrep set via metadata filter, so the smaller book is never drowned out), then keeps only the most relevant passages via cross-encoder reranking. |
 | **Generator** | Synthesises the answer from the retrieved passages only (`openai/gpt-oss-120b` via Groq), keeping every response traceable to the source texts. |
-| **Judge** | Independently scores the draft for groundedness and relevance. Low-confidence answers are regenerated; the score surfaces in the UI as a confidence gauge and evidence tier. When the Judge cannot score an answer, the UI shows **Not adjudicated** rather than a placeholder number. |
+| **Judge** | Independently scores the finished answer for groundedness and relevance. The score surfaces in the UI as a confidence gauge and evidence tier. When the Judge cannot score an answer, the UI shows **Not adjudicated** rather than a placeholder number. |
+
+The answer is **streamed as the model writes it**, so the first words appear
+while the rest is still being generated. The Judge scores the finished text,
+so the confidence gauge and the source rail arrive with the completed turn
+rather than before it.
 
 Each agent's model is configured by role in `llm/config.py` — the generator
 gets the larger model, while the guardrail, query rewrite and judge run on
@@ -90,6 +100,14 @@ decommissioned mid-flight.
 | Corpus | 31,000+ chunks across both books, with source/book/page metadata |
 | First-stage search | Dense similarity, source-balanced across books |
 | Second-stage rerank | Cohere `rerank-english-v3.0` cross-encoder |
+| Evidence floor | Passages the reranker scores below `ARIA_RELEVANCE_FLOOR` (0.02) are not cited |
+
+Retrieval returns the passages that are actually relevant rather than a fixed
+count: the reranker emits its top *n* whether or not that many are any good,
+so a thin query used to pad the citation list with material it had scored 0.0
+— including book index pages and printer footers — each shown with a page
+number and a relevance bar. If nothing clears the floor, the consultation
+fails rather than answering from passages the reranker just rejected.
 
 Embeddings are computed once during ingestion and served from Qdrant Cloud, which
 keeps the deployed footprint small — the app itself only embeds the incoming query
@@ -188,6 +206,13 @@ actually succeed:
 
 A present-but-empty collection is reported as an outage: with no passages
 there is nothing to ground an answer in. Point an uptime monitor here.
+
+`/api/consult` is rate limited, because it is public and every call spends
+real quota — four model calls plus a rerank — against Groq's 8000 TPM
+ceiling. Per-client requests are capped by `ARIA_RATE_LIMIT` (10 per minute)
+and total concurrency by `ARIA_MAX_CONCURRENT` (4); a throttled request
+returns on the error channel, so the UI shows a fault rather than an empty
+reply.
 
 If the vector store is unreachable — Qdrant Cloud removes inactive free-tier
 clusters — see **[docs/runbook-evidence-base.md](docs/runbook-evidence-base.md)**

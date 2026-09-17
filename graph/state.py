@@ -39,7 +39,6 @@ class AriaState(TypedDict):
     is_medical: bool
     #: None means "not adjudicated" — never substitute a placeholder number.
     confidence: float | None
-    retry_count: int
     #: Set only when a model call or retrieval failed. Mutually exclusive
     #: with a usable `answer`.
     failure: AriaFailure | None
@@ -55,7 +54,6 @@ def initial_state(question: str) -> AriaState:
         answer="",
         is_medical=False,
         confidence=None,
-        retry_count=0,
         failure=None,
         judge_failed=False,
     )

@@ -31,7 +31,45 @@ from vectorstore.qdrant_store import collection_name, load_vectorstore
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["BalancedRetriever", "get_balanced_retriever"]
+__all__ = ["DEFAULT_RELEVANCE_FLOOR", "BalancedRetriever", "get_balanced_retriever"]
+
+#: Minimum Cohere relevance a passage needs to be shown as evidence.
+#:
+#: The reranker returns exactly `top_n` passages whether or not that many are
+#: any good, so a thin query padded the citation list with whatever ranked
+#: last. On a real consultation that meant four of five citations scoring
+#: 0.0 — among them a book index page ("fsoprotereno! 29, 30, 93, 121") and a
+#: printer footer ("CH48.indd 11 28-12-2022 14:51:10") — each displayed with
+#: a page number and a relevance bar, as though it supported the answer.
+#:
+#: Observed scores on a well-covered question run 0.96-1.00; genuine junk
+#: sits at 0.00. The floor is deliberately low: it is here to drop passages
+#: the reranker itself considers irrelevant, not to second-guess it.
+DEFAULT_RELEVANCE_FLOOR = 0.02
+
+
+def relevance_floor() -> float:
+    """Tunable without a code change, like every other retrieval knob."""
+    raw = os.getenv("ARIA_RELEVANCE_FLOOR", "").strip()
+    if not raw:
+        return DEFAULT_RELEVANCE_FLOOR
+    try:
+        return max(0.0, min(1.0, float(raw)))
+    except ValueError:
+        logger.warning("ARIA_RELEVANCE_FLOOR=%r is not a number — using default", raw)
+        return DEFAULT_RELEVANCE_FLOOR
+
+
+def _relevance_of(doc: Any) -> float:
+    meta = getattr(doc, "metadata", {}) or {}
+    score: Any = meta.get("relevance_score", meta.get("score"))
+    try:
+        return float(score)
+    except (TypeError, ValueError):
+        # No score at all: keep the passage rather than silently dropping
+        # evidence because a provider changed its metadata key.
+        return 1.0
+
 
 # Qdrant filter that matches only RxPrep chunks (payload field metadata.book)
 RXPREP_FILTER = Filter(must=[FieldCondition(key="metadata.book", match=MatchValue(value="rxprep"))])
@@ -54,11 +92,13 @@ class BalancedRetriever:
         reranker: CohereRerank,
         k_global: int = 14,
         k_rxprep: int = 8,
+        floor: float | None = None,
     ) -> None:
         self.vs = vectorstore
         self.reranker = reranker
         self.k_global = k_global
         self.k_rxprep = k_rxprep
+        self.floor = relevance_floor() if floor is None else floor
 
     def invoke(self, query: str) -> list[Any]:
         """Retrieve and rerank.
@@ -99,21 +139,39 @@ class BalancedRetriever:
         except Exception as exc:
             logger.error("reranker unavailable: %s", exc)
             raise wrap_retrieval_error(exc, "navigator", "reranker") from exc
-        n_rx = sum(1 for d in reranked if d.metadata.get("book") == "rxprep")
+        kept = [d for d in reranked if _relevance_of(d) >= self.floor]
+        if len(kept) < len(reranked):
+            logger.info(
+                "Dropped %d passage(s) below the %.2f relevance floor",
+                len(reranked) - len(kept),
+                self.floor,
+            )
+        if not kept:
+            # The reranker judged every candidate irrelevant. Saying so is
+            # more useful than answering from passages it just rejected.
+            raise AriaRetrievalError(
+                stage="navigator",
+                source=collection_name(),
+                message="no retrieved passage cleared the relevance floor",
+                code=EMPTY_RETRIEVAL_CODE,
+            )
+
+        n_rx = sum(1 for d in kept if d.metadata.get("book") == "rxprep")
         logger.info(
             "Balanced retrieve: %d candidates -> %d kept (%d RxPrep, %d DiPiro)",
             len(candidates),
-            len(reranked),
+            len(kept),
             n_rx,
-            len(reranked) - n_rx,
+            len(kept) - n_rx,
         )
-        return reranked
+        return kept
 
 
 def get_balanced_retriever(
     k_global: int = 14,
     k_rxprep: int = 8,
     top_n: int = 5,
+    floor: float | None = None,
 ) -> BalancedRetriever:
     vectorstore: Any = load_vectorstore()
     model = rerank_model()
@@ -123,14 +181,17 @@ def get_balanced_retriever(
         top_n=top_n,
         cohere_api_key=SecretStr(api_key) if api_key else None,
     )
+    retriever = BalancedRetriever(vectorstore, reranker, k_global, k_rxprep, floor)
     logger.info(
-        "Balanced retriever ready — global %d + RxPrep %d, rerank to top %d via %s",
+        "Balanced retriever ready — global %d + RxPrep %d, rerank to top %d via %s "
+        "(relevance floor %.2f)",
         k_global,
         k_rxprep,
         top_n,
         model,
+        retriever.floor,
     )
-    return BalancedRetriever(vectorstore, reranker, k_global, k_rxprep)
+    return retriever
 
 
 if __name__ == "__main__":

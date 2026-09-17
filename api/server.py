@@ -1,21 +1,32 @@
 """
 ARIA bridge server.
 ------------------------------------------------------------------
-Runs the real pipeline (guardrail -> navigator -> generator -> judge) and
-streams it to the web frontend as Server-Sent Events whose shape matches
-`web/src/lib/client.ts` (ConsultationEvent).
+Transport only. The pipeline lives in `graph.aria_graph`; this module drives
+that graph and translates its events into Server-Sent Events whose shape
+matches `web/src/lib/client.ts` (ConsultationEvent).
+
+It deliberately holds no pipeline knowledge — no agent order, no routing, no
+retry policy. It used to: `run_consultation` called the four agents itself,
+in its own order, with its own failure handling, while the compiled graph sat
+unused. Two implementations of one pipeline had already drifted, and a fix
+applied to one silently missed the other.
 
 Event contract, and the reason it looks like this:
 
   steps  — agent trace; a step may end `done`, `skipped` or `failed`
   meta   — evidence tier, confidence, citations. Emitted ONLY when a real
-           grounded answer exists. `confidence: null` means the answer is
-           real but was not adjudicated.
-  token  — a fragment of grounded answer prose, and nothing else. An
-           exception message must never travel on this channel: the UI
-           renders tokens as the assistant's reply and decorates them with
-           an evidence tier, so an error sent as a token is presented to a
-           clinician with the full authority of a cited answer.
+           grounded answer exists, and emitted AFTER the prose: the answer
+           streams as it is written, and the Judge can only score it once it
+           is finished. The UI renders the gauge and the source rail only on
+           a completed turn, so nothing is shown ungraded.
+           `confidence: null` means the answer is real but was not
+           adjudicated.
+  token  — a fragment of reply prose, and nothing else, forwarded as the
+           model writes it. An exception message must never travel on this
+           channel: the UI renders tokens as the assistant's reply and
+           decorates them with an evidence tier, so an error sent as a token
+           is presented to a clinician with the full authority of a cited
+           answer.
   error  — a failure. Terminal, carries no confidence and no citations.
   done   — end of turn.
 
@@ -31,7 +42,9 @@ import logging
 import os
 import re
 import sys
+import threading
 import time
+from collections import defaultdict, deque
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -45,19 +58,17 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from agents.guardrail_agent import check_guardrail
-from agents.judge_agent import judge_answer
-from agents.navigator_agent import navigator
-from llm.errors import AriaStageError, wrap_provider_error, wrap_retrieval_error
-from llm.generator import generate_answer
+from graph.aria_graph import stream_aria
+from graph.state import AriaFailure
+from llm.errors import AriaStageError, wrap_provider_error
 from llm.preflight import PreflightReport, run_preflight
-from vectorstore.qdrant_store import StoreReport, check_store, collection_name
+from vectorstore.qdrant_store import StoreReport, check_store
 
 logging.basicConfig(
     level=os.getenv("ARIA_LOG_LEVEL", "INFO").upper(),
@@ -104,6 +115,55 @@ if _CORS_ORIGINS:
 
 class ConsultRequest(BaseModel):
     query: str
+
+
+# ── Rate limiting ──────────────────────────────────────────────────────
+# /api/consult is public and every call spends real money and quota: four
+# model calls plus a Cohere rerank. Groq's on-demand tier also caps the
+# generator at 8000 tokens per minute, so a handful of simultaneous readers
+# can push each other into 429s and turn a working demo into a broken one.
+#
+# Two limits, doing different jobs. The per-client window stops one visitor
+# monopolising the Space; the global semaphore bounds total concurrency so
+# the TPM ceiling is respected no matter how many distinct clients arrive.
+# Both are in-process, which is exactly right for a single-container Space
+# and would need replacing with something shared if it were ever replicated.
+_RATE_LIMIT = int(os.getenv("ARIA_RATE_LIMIT", "10"))
+_RATE_WINDOW = float(os.getenv("ARIA_RATE_WINDOW_SECONDS", "60"))
+_MAX_CONCURRENT = int(os.getenv("ARIA_MAX_CONCURRENT", "4"))
+
+_hits: dict[str, deque[float]] = defaultdict(deque)
+_hits_lock = threading.Lock()
+_consult_slots = asyncio.Semaphore(_MAX_CONCURRENT)
+
+
+def client_key(request: Request) -> str:
+    """Identify the caller for rate limiting.
+
+    Behind the Space's proxy the socket address is the proxy, so the
+    forwarded client is used when present. It is spoofable, which is why the
+    global concurrency bound exists as well — that one cannot be evaded by
+    forging a header.
+    """
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def over_rate_limit(key: str, now: float | None = None) -> bool:
+    """True when `key` has already used its allowance for the window."""
+    if _RATE_LIMIT <= 0:
+        return False
+    moment = time.time() if now is None else now
+    with _hits_lock:
+        seen = _hits[key]
+        while seen and moment - seen[0] > _RATE_WINDOW:
+            seen.popleft()
+        if len(seen) >= _RATE_LIMIT:
+            return True
+        seen.append(moment)
+        return False
 
 
 def sse(event: dict[str, Any]) -> str:
@@ -216,192 +276,97 @@ def error_event(exc: AriaStageError) -> dict[str, Any]:
     }
 
 
-async def stream_tokens(text: str) -> AsyncIterator[str]:
-    for tok in re.findall(r"\s+|\S+", text):
-        yield sse({"type": "token", "chunk": tok})
-        await asyncio.sleep(0.014 if not re.match(r"[.,;:]", tok) else 0.03)
+def error_from_state(failure: AriaFailure) -> dict[str, Any]:
+    """Build the error event from the failure the graph recorded."""
+    return {
+        "type": "error",
+        "stage": failure["stage"],
+        "code": failure["code"] or "provider_error",
+        "message": failure["message"],
+    }
+
+
+SCOPE_NOTE = {
+    "kind": "scope",
+    "text": ("ARIA answers pharmacotherapy questions only, grounded in DiPiro's Pharmacotherapy."),
+}
+CAUTION_NOTE = {
+    "kind": "caution",
+    "text": (
+        "Generated from textbook evidence — verify against current guidelines and patient context."
+    ),
+}
 
 
 async def run_consultation(query: str) -> AsyncIterator[str]:
-    steps = base_steps()
+    """Drive the graph and translate its events into SSE.
 
-    def patch(step_id: str, **kw: Any) -> None:
-        for s in steps:
-            if s["id"] == step_id:
-                s.update(kw)
+    The only pipeline fact this function knows is which steps exist, so it
+    can show them pending before the graph reaches them. Everything else —
+    order, routing, what each step reports — comes from the graph.
+    """
+    steps = base_steps()
+    by_id = {s["id"]: s for s in steps}
 
     def steps_event() -> str:
         return sse({"type": "steps", "steps": [dict(s) for s in steps]})
 
-    def fail_from(step_id: str, exc: AriaStageError) -> list[str]:
-        """Mark the failing step and every step after it, then report."""
-        patch(step_id, status="failed", detail="Failed — no answer produced", metric=None)
-        seen_failing = False
-        for s in steps:
-            if s["id"] == step_id:
-                seen_failing = True
+    final: dict[str, Any] | None = None
+
+    async for event in stream_aria(query):
+        kind = event["type"]
+
+        if kind == "step":
+            step = by_id.get(event["id"])
+            if step is None:
                 continue
-            if seen_failing and s["status"] == "pending":
-                s.update(status="skipped", detail="Not reached")
-        logger.error("consultation failed at %s: %s", step_id, exc)
-        return [steps_event(), sse(error_event(exc)), sse({"type": "done"})]
+            step.update({k: v for k, v in event.items() if k != "type" and k != "id"})
+            yield steps_event()
 
-    # 1 — Guardrail
-    patch("guardrail", status="active")
-    yield steps_event()
-    t0 = time.time()
-    try:
-        is_medical = await asyncio.to_thread(check_guardrail, query)
-    except AriaStageError as exc:
-        # Previously this defaulted to `is_medical = True`, so an unreachable
-        # guardrail silently disabled the clinical scope filter.
-        for ev in fail_from("guardrail", exc):
-            yield ev
+        elif kind == "token":
+            yield sse({"type": "token", "chunk": event["text"]})
+
+        elif kind == "final":
+            final = event["state"]
+
+    if final is None:  # pragma: no cover - stream_aria always ends with final
         return
-    patch(
-        "guardrail",
-        status="done",
-        durationMs=int((time.time() - t0) * 1000),
-        metric="medical · in scope" if is_medical else "out of scope",
-        detail=(
-            "Clinical pharmacotherapy query" if is_medical else "Query is outside clinical scope"
-        ),
-    )
-    yield steps_event()
 
-    if not is_medical:
-        for sid in ("navigator", "generator", "judge"):
-            patch(sid, status="skipped", detail="Skipped — out of scope")
+    failure = final["failure"]
+    if failure is not None:
+        # Anything the graph never reached is reported as such, rather than
+        # left spinning in the trace.
+        for step in steps:
+            if step["status"] == "pending":
+                step.update(status="skipped", detail="Not reached")
         yield steps_event()
+        yield sse(error_from_state(failure))
+        yield sse({"type": "done"})
+        return
+
+    if not final["is_medical"]:
         yield sse(
             {
                 "type": "meta",
                 "evidenceTier": "limited",
                 "confidence": 0,
                 "citations": [],
-                "safety": [
-                    {
-                        "kind": "scope",
-                        "text": (
-                            "ARIA answers pharmacotherapy questions only, grounded "
-                            "in DiPiro's Pharmacotherapy."
-                        ),
-                    }
-                ],
+                "safety": [SCOPE_NOTE],
             }
         )
-        msg = (
-            "That falls outside my scope. I'm **ARIA**, a clinical pharmacotherapy "
-            "assistant — I can help with drug selection, dosing, monitoring, "
-            "interactions, and the evidence behind therapeutic decisions, grounded "
-            "in *DiPiro's Pharmacotherapy*."
-        )
-        async for ev in stream_tokens(msg):
-            yield ev
         yield sse({"type": "done"})
         return
 
-    # 2 — Navigator (query rewrite + source-balanced retrieve + Cohere rerank)
-    patch("navigator", status="active")
-    yield steps_event()
-    t0 = time.time()
-    try:
-        chunks = await asyncio.to_thread(navigator, query)
-    except Exception as exc:  # noqa: BLE001 - normalised into an error event
-        # Wrapped as a *retrieval* failure. This used to be wrapped as a
-        # provider error, so a deleted Qdrant cluster told the reader that
-        # ARIA "failed to reach the language model" — pointing the diagnosis
-        # at the one dependency that was working.
-        for ev in fail_from("navigator", wrap_retrieval_error(exc, "navigator", collection_name())):
-            yield ev
-        return
-    patch(
-        "navigator",
-        status="done",
-        durationMs=int((time.time() - t0) * 1000),
-        metric=f"retrieved → {len(chunks)} reranked",
-        detail="Top passages selected by relevance",
-    )
-    yield steps_event()
-
-    # 3 — Generator
-    patch("generator", status="active")
-    yield steps_event()
-    t0 = time.time()
-    try:
-        answer = await asyncio.to_thread(generate_answer, query, chunks)
-    except AriaStageError as exc:
-        for ev in fail_from("generator", exc):
-            yield ev
-        return
-    patch(
-        "generator",
-        status="done",
-        durationMs=int((time.time() - t0) * 1000),
-        metric=f"{len(chunks)} sources cited",
-        detail="Answer grounded in retrieved passages",
-    )
-    yield steps_event()
-
-    # 4 — Judge (computed before reveal so tier/confidence are real)
-    patch("judge", status="active")
-    yield steps_event()
-    t0 = time.time()
-    judge_error: AriaStageError | None = None
-    confidence: float | None = None
-    try:
-        judgment = await asyncio.to_thread(judge_answer, query, answer, chunks)
-        confidence = judgment.confidence
-    except AriaStageError as exc:
-        # The answer and its citations are genuine — only the score is
-        # missing. Never substitute a placeholder number here; a fabricated
-        # 0.5 used to be drawn on a real calibrated gauge.
-        judge_error = exc
-        logger.warning("judge unavailable (%s) — answer left unadjudicated", exc.code)
-
-    adjudicated = confidence is not None
+    confidence = final["confidence"]
     yield sse(
         {
             "type": "meta",
             "evidenceTier": tier_from_confidence(confidence) if confidence is not None else None,
             "confidence": confidence,
-            "citations": build_citations(chunks),
-            "safety": [
-                {
-                    "kind": "caution",
-                    "text": (
-                        "Generated from textbook evidence — verify against current "
-                        "guidelines and patient context."
-                    ),
-                }
-            ],
+            "citations": build_citations(final["chunks"]),
+            "safety": [CAUTION_NOTE],
         }
     )
-
-    async for ev in stream_tokens(answer):
-        yield ev
-
-    if adjudicated and confidence is not None:
-        patch(
-            "judge",
-            status="done",
-            durationMs=int((time.time() - t0) * 1000),
-            metric=f"{round(confidence * 100)}% confidence",
-            detail="Answer scored for faithfulness to cited sources",
-        )
-    else:
-        patch(
-            "judge",
-            status="failed",
-            durationMs=int((time.time() - t0) * 1000),
-            metric="not adjudicated",
-            detail=(
-                "Judge unavailable — answer not scored"
-                if judge_error is not None
-                else "Judge returned no usable score"
-            ),
-        )
-    yield steps_event()
     yield sse({"type": "done"})
 
 
@@ -434,11 +399,35 @@ async def health() -> JSONResponse:
 
 
 @app.post("/api/consult")
-async def consult(req: ConsultRequest) -> StreamingResponse:
+async def consult(req: ConsultRequest, request: Request) -> StreamingResponse:
+    key = client_key(request)
+    limited = over_rate_limit(key)
+    if limited:
+        logger.warning("rate limit hit by %s", key)
+
     async def gen() -> AsyncIterator[str]:
+        if limited:
+            # Reported on the error channel like any other dead end, so the
+            # UI shows a fault rather than an empty, apparently-fine reply.
+            yield sse(
+                {
+                    "type": "error",
+                    "stage": "transport",
+                    "code": "rate_limited",
+                    "message": (
+                        "ARIA could not produce an answer: too many requests from this "
+                        "client. Wait a moment and try again. No clinical content was "
+                        "generated."
+                    ),
+                }
+            )
+            yield sse({"type": "done"})
+            return
+
         try:
-            async for ev in run_consultation(req.query.strip()):
-                yield ev
+            async with _consult_slots:
+                async for ev in run_consultation(req.query.strip()):
+                    yield ev
         except Exception as exc:  # last resort — still never a token
             # The old code streamed `str(exc)` as a `token`, so the browser
             # rendered a stack trace as ARIA's grounded reply. Failures leave

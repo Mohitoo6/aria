@@ -10,6 +10,7 @@ stops with an explicit error state.
 from __future__ import annotations
 
 import logging
+import re
 
 from llm.config import Role
 from llm.llm_setup import invoke_role
@@ -41,8 +42,19 @@ def check_guardrail(query: str) -> bool:
     """
     reply = invoke_role(Role.GUARDRAIL, GUARDRAIL_PROMPT.format(query=query))
     decision = reply.strip().upper()
-    is_medical = "YES" in decision
-    logger.info("Guardrail check: %r -> %s", query, decision)
+
+    # First whole word wins. A substring test for "YES" also matched the
+    # "yes" inside a hedged refusal ("...the answer is no, yes it's off
+    # topic"), and matched nothing predictable when the model added prose.
+    verdict = re.search(r"\b(YES|NO)\b", decision)
+    if verdict is None:
+        # The guardrail cannot vouch for this query, so it is not allowed
+        # through — the same conservative direction as an unreachable one.
+        logger.warning("Guardrail reply %r has no YES/NO — treating as out of scope", decision)
+        return False
+
+    is_medical = verdict.group(1) == "YES"
+    logger.info("Guardrail check: %r -> %s", query, verdict.group(1))
     return is_medical
 
 

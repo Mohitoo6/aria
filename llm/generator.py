@@ -14,26 +14,25 @@ and presented with ARIA's citation furniture around it.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
 from typing import Any
 
 from llm.config import Role
 from llm.errors import EMPTY_RETRIEVAL_CODE, AriaRetrievalError
-from llm.llm_setup import invoke_role
+from llm.llm_setup import stream_role
 from llm.prompts import ANSWER_PROMPT
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["generate_answer"]
+__all__ = ["generate_answer", "stream_answer"]
 
 
-def generate_answer(query: str, chunks: list[Any]) -> str:
-    """Write an answer to `query` grounded strictly in `chunks`.
+def _prompt_for(query: str, chunks: list[Any]) -> str:
+    """Build the grounded prompt, refusing an empty passage set.
 
     Raises:
         AriaRetrievalError: if `chunks` is empty. Generating from an empty
             context is the one failure mode ARIA exists to prevent.
-        AriaLLMError: if the generator model (and its fallback) cannot be
-            reached. The exception text is never a valid answer.
     """
     if not chunks:
         raise AriaRetrievalError(
@@ -44,10 +43,31 @@ def generate_answer(query: str, chunks: list[Any]) -> str:
         )
 
     context = "\n\n".join(chunk.page_content for chunk in chunks)
-    answer = invoke_role(
-        Role.GENERATOR,
-        ANSWER_PROMPT.format(context=context, question=query),
-    )
+    return ANSWER_PROMPT.format(context=context, question=query)
+
+
+def stream_answer(query: str, chunks: list[Any]) -> Iterator[str]:
+    """Stream an answer to `query` grounded strictly in `chunks`.
+
+    This is the serving path: fragments reach the reader as the model writes
+    them, rather than after the whole answer exists.
+
+    Raises:
+        AriaRetrievalError: if `chunks` is empty.
+        AriaLLMError: if the generator model (and its fallback) cannot be
+            reached. The exception text is never a valid answer.
+    """
+    yield from stream_role(Role.GENERATOR, _prompt_for(query, chunks))
+
+
+def generate_answer(query: str, chunks: list[Any]) -> str:
+    """Write an answer to `query` grounded strictly in `chunks`.
+
+    The batch form, for callers with nothing to stream to (the eval suite,
+    the CLI entry points). Same prompt and same guarantees as
+    `stream_answer` because it is the same call, merely joined up.
+    """
+    answer = "".join(stream_answer(query, chunks))
     logger.info("generated answer of %d characters from %d chunks", len(answer), len(chunks))
     return answer
 
