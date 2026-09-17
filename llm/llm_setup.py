@@ -89,6 +89,12 @@ def invoke_role(role: Role, prompt: str) -> str:
     except Exception as exc:  # noqa: BLE001 - normalised immediately below
         primary_error = wrap_provider_error(exc, role.value, spec.model)
 
+    # Only a model error can be cured by swapping the model. Anything else
+    # that reached here (a retrieval error passing through, say) is re-raised
+    # as-is rather than being retried against a different model.
+    if not isinstance(primary_error, AriaLLMError):
+        raise primary_error
+
     secondary = fallback_model()
     if not primary_error.is_dead_model or secondary == spec.model:
         logger.error(

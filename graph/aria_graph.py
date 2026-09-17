@@ -122,18 +122,18 @@ def ask_aria(question: str) -> str:
     """Convenience wrapper returning just the answer text.
 
     Raises:
-        AriaLLMError: if the consultation failed. It deliberately does not
+        AriaStageError: if the consultation failed. It deliberately does not
             return the error as a string — that is the bug this refactor
             exists to remove.
     """
-    from llm.errors import AriaLLMError
+    from llm.errors import AriaStageError
 
     final = run_aria(question)
     failure = final["failure"]
     if failure is not None:
-        raise AriaLLMError(
+        raise AriaStageError(
             stage=failure["stage"],
-            model=failure["model"],
+            source=failure["source"],
             message=failure["message"],
             code=failure["code"],
         )

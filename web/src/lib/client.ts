@@ -10,12 +10,34 @@ import { recipeFor, OUT_OF_SCOPE } from './mockData';
 /*
   Transport boundary.
   ------------------------------------------------------------------
-  `consult()` yields a stream of events that mirror what ARIA's LangGraph
-  backend would emit over SSE: agent-step updates, then answer metadata,
-  then streamed tokens, then done. Swapping the mock for a live backend
-  means replacing the body of `consult` with an SSE reader that yields the
-  same `ConsultationEvent` shape — nothing else in the app changes.
+  `consult()` yields a stream of events from ARIA's LangGraph backend over
+  SSE: agent-step updates, then answer metadata, then streamed tokens, then
+  done.
+
+  On the mock, and why it is now opt-in only.
+  ------------------------------------------------------------------
+  `mockConsult` replays fixed, human-written sample answers so the UI can be
+  developed without a backend. It previously ran as an automatic *fallback*:
+  if a 2.5s probe of /api/health did not come back, `consult()` quietly
+  served the mock instead.
+
+  In production that is the worst failure this codebase can have. The mock's
+  recipes are invented clinical content — doses, INR targets, eGFR
+  thresholds — carried on the same `token` channel as a real answer, with
+  page-level citations, an evidence tier and a confidence gauge attached.
+  A reader had no way to tell them from adjudicated output. And the trigger
+  was routine: a sleeping Hugging Face Space takes far longer than 2.5s to
+  wake, so the ordinary cold start was enough to fire it.
+
+  So the mock is now explicit and dev-only (VITE_ARIA_MOCK=1, which is never
+  set in the production build). When the backend cannot be reached, the UI
+  reports a transport failure — the same honest dead end the rest of the
+  pipeline produces. No answer is always better than a fabricated one.
 */
+
+/** Dev-only. Never set in the deployed build. */
+const USE_MOCK =
+  import.meta.env.DEV && import.meta.env.VITE_ARIA_MOCK === '1';
 
 export type ConsultationEvent =
   | { type: 'steps'; steps: AgentStep[] }
@@ -192,26 +214,6 @@ async function* mockConsult(
    The event shape is identical to the mock, so the UI is agnostic.
    ---------------------------------------------------------------------- */
 
-let liveProbe: Promise<boolean> | null = null;
-
-function probeLive(): Promise<boolean> {
-  if (!liveProbe) {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 2500);
-    const p = fetch('/api/health', { signal: ctrl.signal })
-      .then((r) => r.ok)
-      .catch(() => false)
-      .finally(() => clearTimeout(t));
-    liveProbe = p;
-    // Cache "live", but never cache a negative result — so a transient blip
-    // can't lock the whole session onto the offline mock.
-    p.then((ok) => {
-      if (!ok) liveProbe = null;
-    });
-  }
-  return liveProbe;
-}
-
 async function* apiConsult(
   query: string,
   opts: ConsultOptions,
@@ -243,30 +245,21 @@ async function* apiConsult(
 }
 
 /**
- * Public transport. Uses the live ARIA backend when reachable, otherwise
- * transparently falls back to the in-browser mock — so the UI runs either way.
+ * Public transport. Always the live ARIA backend, unless the dev-only mock
+ * is explicitly enabled. A backend failure surfaces as a failure: there is
+ * no silent fallback to sample content.
  */
 export async function* consult(
   query: string,
   opts: ConsultOptions = {},
 ): AsyncGenerator<ConsultationEvent> {
-  if (await probeLive()) {
-    let started = false;
-    try {
-      for await (const ev of apiConsult(query, opts)) {
-        started = true;
-        yield ev;
-      }
-      return;
-    } catch (err) {
-      if ((err as DOMException)?.name === 'AbortError') throw err;
-      // If the stream had already begun, surface the failure; only fall back
-      // to the mock when the live backend never connected.
-      if (started) throw err;
-      liveProbe = null; // re-probe next time
-    }
+  if (USE_MOCK) {
+    yield* mockConsult(query, opts);
+    return;
   }
-  yield* mockConsult(query, opts);
+  // Errors propagate to useConsultation, which renders them as a failed turn
+  // with no prose, no citations and no certainty badge.
+  yield* apiConsult(query, opts);
 }
 
 async function* streamTokens(

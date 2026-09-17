@@ -1,10 +1,10 @@
 """
 LangGraph node functions.
 
-Every node that touches an LLM converts a provider failure into an explicit
-`failure` entry on the state and stops the pipeline. No node ever writes an
-error message into `answer` — that field is reserved for grounded content,
-and the graph's routing depends on being able to tell the two apart.
+Every node that touches an external dependency converts a failure into an
+explicit `failure` entry on the state and stops the pipeline. No node ever
+writes an error message into `answer` — that field is reserved for grounded
+content, and the graph's routing depends on telling the two apart.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from agents.guardrail_agent import check_guardrail
 from agents.judge_agent import judge_answer
 from agents.navigator_agent import navigator
 from graph.state import AriaState, record_failure
-from llm.errors import AriaLLMError
+from llm.errors import AriaLLMError, AriaStageError
 from llm.generator import generate_answer
 
 logger = logging.getLogger(__name__)
@@ -48,7 +48,10 @@ def navigator_node(state: AriaState) -> AriaState:
     logger.info("NAVIGATOR")
     try:
         state["chunks"] = navigator(state["query"])
-    except AriaLLMError as exc:
+    except AriaStageError as exc:
+        # Catches both kinds: the query-rewrite model and the vector store.
+        # An empty retrieval arrives here too — never carried on as "no
+        # chunks", which would let the generator answer from memory.
         record_failure(state, exc)
     return state
 

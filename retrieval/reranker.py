@@ -3,6 +3,12 @@ Source-balanced retrieval with Cohere reranking.
 
 The rerank model ID comes from `llm.config` rather than being hardcoded, so
 the next reranker deprecation is an environment change, not a code change.
+
+Retrieval owns two remote dependencies — the Qdrant collection and the
+Cohere reranker — and normalises a failure in either into an
+`AriaRetrievalError`. It must not be reported as a language-model failure:
+that sent operators to the wrong subsystem while the real cause was a
+vector store that had stopped existing.
 """
 
 from __future__ import annotations
@@ -20,7 +26,8 @@ from pydantic import SecretStr
 from qdrant_client.models import FieldCondition, Filter, MatchValue
 
 from llm.config import rerank_model
-from vectorstore.qdrant_store import load_vectorstore
+from llm.errors import EMPTY_RETRIEVAL_CODE, AriaRetrievalError, wrap_retrieval_error
+from vectorstore.qdrant_store import collection_name, load_vectorstore
 
 logger = logging.getLogger(__name__)
 
@@ -54,8 +61,19 @@ class BalancedRetriever:
         self.k_rxprep = k_rxprep
 
     def invoke(self, query: str) -> list[Any]:
-        glob = self.vs.similarity_search(query, k=self.k_global)
-        rx = self.vs.similarity_search(query, k=self.k_rxprep, filter=RXPREP_FILTER)
+        """Retrieve and rerank.
+
+        Raises:
+            AriaRetrievalError: if the vector store or the reranker cannot be
+                reached. Returning an empty list instead would let the
+                generator answer with no evidence at all.
+        """
+        try:
+            glob = self.vs.similarity_search(query, k=self.k_global)
+            rx = self.vs.similarity_search(query, k=self.k_rxprep, filter=RXPREP_FILTER)
+        except Exception as exc:
+            logger.error("vector store unreachable during retrieval: %s", exc)
+            raise wrap_retrieval_error(exc, "navigator", collection_name()) from exc
 
         seen: set[str] = set()
         candidates: list[Any] = []
@@ -67,9 +85,20 @@ class BalancedRetriever:
             candidates.append(d)
 
         if not candidates:
-            return []
+            # Reachable but empty: an un-restored or wrongly named collection
+            # looks exactly like this, and must not pass for "no good match".
+            raise AriaRetrievalError(
+                stage="navigator",
+                source=collection_name(),
+                message="the vector store returned no candidate passages",
+                code=EMPTY_RETRIEVAL_CODE,
+            )
 
-        reranked = list(self.reranker.compress_documents(candidates, query))
+        try:
+            reranked = list(self.reranker.compress_documents(candidates, query))
+        except Exception as exc:
+            logger.error("reranker unavailable: %s", exc)
+            raise wrap_retrieval_error(exc, "navigator", "reranker") from exc
         n_rx = sum(1 for d in reranked if d.metadata.get("book") == "rxprep")
         logger.info(
             "Balanced retrieve: %d candidates -> %d kept (%d RxPrep, %d DiPiro)",
@@ -86,8 +115,7 @@ def get_balanced_retriever(
     k_rxprep: int = 8,
     top_n: int = 5,
 ) -> BalancedRetriever:
-    # vectorstore/ is untyped and out of scope for this change.
-    vectorstore: Any = load_vectorstore()  # type: ignore[no-untyped-call]
+    vectorstore: Any = load_vectorstore()
     model = rerank_model()
     api_key = os.getenv("COHERE_API_KEY")
     reranker = CohereRerank(

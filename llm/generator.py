@@ -4,6 +4,11 @@ Generator — synthesises the answer from retrieved passages only.
 Returns grounded prose or raises. It must never return an error string:
 the whole point of the error taxonomy is that the caller can tell the
 difference between an answer and a failure without inspecting the text.
+
+It also refuses to run on an empty passage set. The navigator already
+raises in that case; this is the second lock on the same door, because the
+cost of it failing open is an answer written from the model's own memory
+and presented with ARIA's citation furniture around it.
 """
 
 from __future__ import annotations
@@ -12,6 +17,7 @@ import logging
 from typing import Any
 
 from llm.config import Role
+from llm.errors import EMPTY_RETRIEVAL_CODE, AriaRetrievalError
 from llm.llm_setup import invoke_role
 from llm.prompts import ANSWER_PROMPT
 
@@ -24,9 +30,19 @@ def generate_answer(query: str, chunks: list[Any]) -> str:
     """Write an answer to `query` grounded strictly in `chunks`.
 
     Raises:
+        AriaRetrievalError: if `chunks` is empty. Generating from an empty
+            context is the one failure mode ARIA exists to prevent.
         AriaLLMError: if the generator model (and its fallback) cannot be
             reached. The exception text is never a valid answer.
     """
+    if not chunks:
+        raise AriaRetrievalError(
+            stage="generator",
+            source="retrieved passages",
+            message="refusing to generate an answer with no source passages",
+            code=EMPTY_RETRIEVAL_CODE,
+        )
+
     context = "\n\n".join(chunk.page_content for chunk in chunks)
     answer = invoke_role(
         Role.GENERATOR,

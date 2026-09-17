@@ -54,9 +54,10 @@ from pydantic import BaseModel
 from agents.guardrail_agent import check_guardrail
 from agents.judge_agent import judge_answer
 from agents.navigator_agent import navigator
-from llm.errors import AriaLLMError, wrap_provider_error
+from llm.errors import AriaStageError, wrap_provider_error, wrap_retrieval_error
 from llm.generator import generate_answer
 from llm.preflight import PreflightReport, run_preflight
+from vectorstore.qdrant_store import StoreReport, check_store, collection_name
 
 logging.basicConfig(
     level=os.getenv("ARIA_LOG_LEVEL", "INFO").upper(),
@@ -64,25 +65,41 @@ logging.basicConfig(
 )
 logger = logging.getLogger("aria.api")
 
-#: Result of the boot-time model check, exposed on /api/health.
+#: Results of the boot-time checks, exposed on /api/health.
 _preflight: PreflightReport = PreflightReport()
+_store: StoreReport = StoreReport(collection="(unchecked)")
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    """Validate every configured model before serving a single request."""
-    global _preflight
-    _preflight = await asyncio.to_thread(run_preflight)
+    """Validate every hard dependency before serving a single request.
+
+    Both dependencies are checked, not just the model provider. Reporting
+    "ok" while the evidence base was gone is what let a total outage look
+    healthy from the outside for as long as it did.
+    """
+    global _preflight, _store
+    _preflight, _store = await asyncio.gather(
+        asyncio.to_thread(run_preflight),
+        asyncio.to_thread(check_store),
+    )
     yield
 
 
 app = FastAPI(title="ARIA Bridge", lifespan=lifespan)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
+# In production the API and the built UI are served from the same origin, so
+# no cross-origin access is needed at all. The dev server (vite, port 5183)
+# proxies /api, so it is same-origin too. Extra origins can be allowed
+# explicitly via ARIA_CORS_ORIGINS rather than opening the API to every site.
+_CORS_ORIGINS = [o.strip() for o in os.getenv("ARIA_CORS_ORIGINS", "").split(",") if o.strip()]
+if _CORS_ORIGINS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_CORS_ORIGINS,
+        allow_methods=["GET", "POST"],
+        allow_headers=["Content-Type"],
+    )
 
 
 class ConsultRequest(BaseModel):
@@ -185,7 +202,7 @@ def build_citations(chunks: list[Any]) -> list[dict[str, Any]]:
     return cites
 
 
-def error_event(exc: AriaLLMError) -> dict[str, Any]:
+def error_event(exc: AriaStageError) -> dict[str, Any]:
     """The one and only way a failure reaches the browser.
 
     Note what is absent: no confidence, no evidenceTier, no citations, and
@@ -216,7 +233,7 @@ async def run_consultation(query: str) -> AsyncIterator[str]:
     def steps_event() -> str:
         return sse({"type": "steps", "steps": [dict(s) for s in steps]})
 
-    def fail_from(step_id: str, exc: AriaLLMError) -> list[str]:
+    def fail_from(step_id: str, exc: AriaStageError) -> list[str]:
         """Mark the failing step and every step after it, then report."""
         patch(step_id, status="failed", detail="Failed — no answer produced", metric=None)
         seen_failing = False
@@ -235,7 +252,7 @@ async def run_consultation(query: str) -> AsyncIterator[str]:
     t0 = time.time()
     try:
         is_medical = await asyncio.to_thread(check_guardrail, query)
-    except AriaLLMError as exc:
+    except AriaStageError as exc:
         # Previously this defaulted to `is_medical = True`, so an unreachable
         # guardrail silently disabled the clinical scope filter.
         for ev in fail_from("guardrail", exc):
@@ -291,7 +308,11 @@ async def run_consultation(query: str) -> AsyncIterator[str]:
     try:
         chunks = await asyncio.to_thread(navigator, query)
     except Exception as exc:  # noqa: BLE001 - normalised into an error event
-        for ev in fail_from("navigator", wrap_provider_error(exc, "navigator", "retrieval")):
+        # Wrapped as a *retrieval* failure. This used to be wrapped as a
+        # provider error, so a deleted Qdrant cluster told the reader that
+        # ARIA "failed to reach the language model" — pointing the diagnosis
+        # at the one dependency that was working.
+        for ev in fail_from("navigator", wrap_retrieval_error(exc, "navigator", collection_name())):
             yield ev
         return
     patch(
@@ -309,7 +330,7 @@ async def run_consultation(query: str) -> AsyncIterator[str]:
     t0 = time.time()
     try:
         answer = await asyncio.to_thread(generate_answer, query, chunks)
-    except AriaLLMError as exc:
+    except AriaStageError as exc:
         for ev in fail_from("generator", exc):
             yield ev
         return
@@ -326,12 +347,12 @@ async def run_consultation(query: str) -> AsyncIterator[str]:
     patch("judge", status="active")
     yield steps_event()
     t0 = time.time()
-    judge_error: AriaLLMError | None = None
+    judge_error: AriaStageError | None = None
     confidence: float | None = None
     try:
         judgment = await asyncio.to_thread(judge_answer, query, answer, chunks)
         confidence = judgment.confidence
-    except AriaLLMError as exc:
+    except AriaStageError as exc:
         # The answer and its citations are genuine — only the score is
         # missing. Never substitute a placeholder number here; a fabricated
         # 0.5 used to be drawn on a real calibrated gauge.
@@ -386,13 +407,29 @@ async def run_consultation(query: str) -> AsyncIterator[str]:
 
 @app.get("/api/health")
 async def health() -> JSONResponse:
-    """Health, including whether every configured model exists upstream."""
+    """Health across both hard dependencies: the models and the evidence base.
+
+    The evidence base is re-probed on request rather than served from the
+    boot-time result, so a cluster that dies (or is restored) while the
+    process is up is reflected without a restart.
+
+    "ok" here is a claim that a consultation would actually succeed. It is
+    downgraded to "degraded" whenever either dependency is unusable, because
+    a status page that reported "ok" through a total outage is why this
+    outage went unnoticed.
+    """
+    global _store
+    _store = await asyncio.to_thread(check_store)
+
+    healthy = _preflight.ok and _store.ok
     return JSONResponse(
         {
-            "status": "ok" if _preflight.ok else "degraded",
+            "status": "ok" if healthy else "degraded",
             "backend": "aria-langgraph",
             "models": _preflight.as_dict(),
-        }
+            "evidenceBase": _store.as_dict(),
+        },
+        status_code=200 if healthy else 503,
     )
 
 

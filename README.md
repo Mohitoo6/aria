@@ -133,8 +133,9 @@ aria/
 ├── retrieval/           # Retriever + source-balanced Cohere reranking
 ├── vectorstore/         # Qdrant Cloud store loader
 ├── web/                 # React frontend (journal UI)
+├── docs/                # Screenshots and operational runbooks
 ├── Dockerfile           # Two-stage build for Hugging Face Spaces
-├── migrate_to_qdrant.py # One-time migration: local store → Qdrant Cloud
+├── migrate_to_qdrant.py # Restore/migrate embeddings into Qdrant (no re-embedding)
 └── requirements.txt
 ```
 
@@ -167,7 +168,30 @@ You can also exercise the pipeline directly from the command line:
 ```bash
 python -m graph.aria_graph       # runs the full agent graph on test queries
 python -m retrieval.reranker     # retrieval smoke test
+python -m vectorstore.qdrant_store  # evidence-base health probe
+python -m llm.preflight          # model availability probe
 ```
+
+## Health and operations
+
+`GET /api/health` is a real dependency check, not a liveness ping. It reports
+both hard dependencies and returns **503** unless a consultation would
+actually succeed:
+
+```json
+{
+  "status": "ok",
+  "models":       { "ok": true, "checked": ["openai/gpt-oss-20b", "openai/gpt-oss-120b"] },
+  "evidenceBase": { "ok": true, "collection": "aria_medical", "points": 31228, "vectorSize": 384 }
+}
+```
+
+A present-but-empty collection is reported as an outage: with no passages
+there is nothing to ground an answer in. Point an uptime monitor here.
+
+If the vector store is unreachable — Qdrant Cloud removes inactive free-tier
+clusters — see **[docs/runbook-evidence-base.md](docs/runbook-evidence-base.md)**
+for the restore procedure.
 
 ## Evaluation
 
@@ -205,6 +229,26 @@ ingestion tooling.
 ARIA is an educational project. Answers are generated from textbook evidence and
 each response carries an explicit caution to verify against current guidelines and
 patient context. It is not a substitute for professional medical judgement.
+
+The design rule underneath that: **nothing that is not an adjudicated, grounded
+answer may ever be rendered as one.** In practice this means ARIA fails closed
+rather than degrading quietly.
+
+- A provider or retrieval failure travels on its own SSE channel to its own UI
+  state — never as answer prose, and never carrying an evidence tier,
+  confidence score or citations.
+- **Retrieval failures name the evidence base, not the language model**, so an
+  outage is diagnosed against the dependency that actually broke.
+- **No passages means no answer.** An empty retrieval raises rather than
+  handing the generator an empty context, which would produce an answer from
+  the model's own memory wearing ARIA's citation furniture.
+- An unreachable guardrail stops the turn instead of defaulting to "in scope".
+- An unavailable Judge leaves `confidence: null` — never a placeholder number
+  drawn on a calibrated gauge.
+- The in-browser sample responses used for UI development are **dev-only by
+  construction** (`VITE_ARIA_MOCK=1`) and cannot be reached from a production
+  build. They were previously an automatic fallback when the backend was slow
+  to respond, which could present invented clinical content as a real answer.
 
 ## Authors
 
