@@ -4,33 +4,96 @@ import { CitationMarker } from './CitationMarker';
 /*
   Dependency-free markdown for clinical prose, parsed line-by-line so mixed
   blocks (a heading immediately followed by text and bullets) render correctly:
-  headings (#..######), unordered lists (-, *, +), ordered lists (1. / 1)),
-  GitHub tables, **bold**, *italic*, and [[n]] citation markers. Typeset for
-  the journal: section subheads in small caps, numbered journal tables.
+  headings (#..######), thematic breaks (---), unordered lists (-, *, +),
+  ordered lists (1. / 1)), GitHub tables, **bold**, *italic*, backslash
+  escapes, and [[n]] citation markers. Typeset for the journal: section
+  subheads in small caps, numbered journal tables.
+
+  Anything this parser does not recognise is printed verbatim, so every gap
+  in it surfaces as literal punctuation sitting in the middle of clinical
+  prose. Three such gaps were reaching readers:
+
+    ---     a thematic break fell through to a paragraph and printed as a
+            row of hyphens (the generator emits these between sections).
+    \*      a backslash-escaped asterisk printed the backslash, because
+            escapes were never consumed (`\*All doses are with meals`).
+    <br>    models emit these inside table cells; with no handling the tag
+            itself was printed as text.
+
+  Handled here rather than upstream: the generator is free to write ordinary
+  Markdown, and the renderer is the one place that decides how it looks.
 */
 
-function renderInline(text: string, keyBase: string): ReactNode[] {
+/*
+  Characters to fold before rendering.
+
+  The prose face is Spectral, whose Google Fonts latin subset has no
+  subscripts or superscripts, so "AT₁" fell back — and where the fallback
+  chain has no glyph either, the reader gets a tofu box mid-sentence. The
+  underlying textbook writes these as plain "AT1", so folding matches the
+  source rather than inventing anything. The narrow no-break space (U+202F,
+  30+ per answer) and non-breaking hyphen (U+2011) are folded to their plain
+  equivalents for the same reason: invisible or box-rendered, never useful.
+
+  Typographic characters that fonts DO cover — – — " " … ≥ ≤ → ↑ ↓ ² ³ — are
+  deliberately left alone.
+*/
+const FOLD: Record<string, string> = {
+  '\u202f': ' ', // narrow no-break space
+  '\u00a0': ' ', // no-break space
+  '\u2011': '-', // non-breaking hyphen
+  '\u2080': '0', '\u2081': '1', '\u2082': '2', '\u2083': '3', '\u2084': '4',
+  '\u2085': '5', '\u2086': '6', '\u2087': '7', '\u2088': '8', '\u2089': '9',
+  '\u207a': '+', '\u207b': '-',
+};
+
+const FOLD_RE = new RegExp(`[${Object.keys(FOLD).join('')}]`, 'g');
+
+/** Fold characters the prose face cannot draw. Never changes wording. */
+function fold(text: string): string {
+  return text.replace(FOLD_RE, (c) => FOLD[c] ?? c);
+}
+
+/*
+  Order matters: the escape branch is first so `\*` is consumed before the
+  emphasis branches can treat the asterisk as markup. `<br>` becomes a real
+  line break, and a few stray inline tags are dropped rather than printed —
+  models reach for them inside table cells, where a literal tag is both
+  wrong and ugly. Note `<[a-zA-Z/]` cannot match a comparison like `<30`.
+*/
+const INLINE =
+  /\\(.)|<br\s*\/?>|<\/?(?:b|i|u|em|strong|sub|sup|span|p|div|code)(?:\s[^>]*)?\/?>|\*\*(.+?)\*\*|__(.+?)__|\*(.+?)\*|\[\[(\d+)\]\]/gi;
+
+function renderInline(raw: string, keyBase: string): ReactNode[] {
+  const text = fold(raw);
   const out: ReactNode[] = [];
-  const re = /\*\*(.+?)\*\*|__(.+?)__|\*(.+?)\*|\[\[(\d+)\]\]/g;
+  const re = new RegExp(INLINE.source, 'gi');
   let last = 0;
   let m: RegExpExecArray | null;
   let i = 0;
   while ((m = re.exec(text))) {
     if (m.index > last) out.push(<Fragment key={`${keyBase}-t${i}`}>{text.slice(last, m.index)}</Fragment>);
-    if (m[1] !== undefined || m[2] !== undefined) {
+    if (m[1] !== undefined) {
+      // Escaped character: print the character, drop the backslash.
+      out.push(<Fragment key={`${keyBase}-e${i}`}>{m[1]}</Fragment>);
+    } else if (/^<br/i.test(m[0])) {
+      out.push(<br key={`${keyBase}-br${i}`} />);
+    } else if (m[0].startsWith('<')) {
+      // A stray inline tag: drop it, keep the text around it.
+    } else if (m[2] !== undefined || m[3] !== undefined) {
       out.push(
         <strong key={`${keyBase}-b${i}`} className="font-semibold text-ink">
-          {m[1] ?? m[2]}
+          {m[2] ?? m[3]}
         </strong>,
       );
-    } else if (m[3] !== undefined) {
+    } else if (m[4] !== undefined) {
       out.push(
         <em key={`${keyBase}-i${i}`} className="italic">
-          {m[3]}
+          {m[4]}
         </em>,
       );
-    } else if (m[4] !== undefined) {
-      out.push(<CitationMarker key={`${keyBase}-c${i}`} marker={Number(m[4])} />);
+    } else if (m[5] !== undefined) {
+      out.push(<CitationMarker key={`${keyBase}-c${i}`} marker={Number(m[5])} />);
     }
     last = m.index + m[0].length;
     i++;
@@ -74,6 +137,7 @@ interface UlItem {
 
 type Block =
   | { kind: 'heading'; level: number; text: string }
+  | { kind: 'hr' }
   | { kind: 'ul'; items: UlItem[] }
   | { kind: 'ol'; items: { num: string; text: string }[] }
   | { kind: 'table'; table: ParsedTable }
@@ -82,6 +146,9 @@ type Block =
 const UL = /^[-*+]\s+(.*)$/;
 const OL = /^(\d+)[.)]\s+(.*)$/;
 const HEAD = /^(#{1,6})\s+(.*)$/;
+// A thematic break. Cannot collide with a list item (those need a space
+// after the marker) or a table separator (those contain a pipe).
+const HR = /^(?:-{3,}|\*{3,}|_{3,})$/;
 
 function tokenize(content: string): Block[] {
   const lines = content.replace(/\r/g, '').split('\n');
@@ -107,6 +174,13 @@ function tokenize(content: string): Block[] {
     if (h) {
       flush();
       blocks.push({ kind: 'heading', level: h[1].length, text: h[2].replace(/#+\s*$/, '').trim() });
+      i++;
+      continue;
+    }
+
+    if (HR.test(t)) {
+      flush();
+      blocks.push({ kind: 'hr' });
       i++;
       continue;
     }
@@ -187,6 +261,9 @@ export function Prose({ content, streaming }: { content: string; streaming?: boo
               </p>
             );
           }
+
+          case 'hr':
+            return <hr key={bi} className="my-5 border-0 border-t border-line" />;
 
           case 'ul':
             return (
