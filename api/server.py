@@ -100,7 +100,26 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         asyncio.to_thread(run_preflight),
         asyncio.to_thread(check_store),
     )
+    # Load the retriever in the background rather than on the first
+    # question: the embedding and BM25 models take ~15-20 s to load on a
+    # cold CPU host, which made the first reader after every restart wait
+    # 24 s for an answer that normally takes under 10. Serving starts at
+    # once; a question that arrives mid-warm-up waits on the same lock.
+    warm = asyncio.create_task(asyncio.to_thread(_warm_retriever))
     yield
+    warm.cancel()
+
+
+def _warm_retriever() -> None:
+    from agents.navigator_agent import _get_retriever
+
+    try:
+        _get_retriever()
+        logger.info("retriever warm: embedding and BM25 models loaded")
+    except AriaStageError as exc:
+        # Not fatal: the first consultation retries, and /api/health is
+        # already reporting the evidence base honestly.
+        logger.warning("retriever warm-up failed (%s) — will retry on first request", exc)
 
 
 app = FastAPI(title="ARIA Bridge", lifespan=lifespan)
