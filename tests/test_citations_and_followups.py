@@ -267,3 +267,32 @@ def test_concurrent_first_requests_build_one_retriever(
         t.join()
 
     assert len(built) == 1
+
+
+# ── Retrieval strength, reported separately from faithfulness ──────────
+
+
+def test_thin_retrieval_is_flagged_even_when_the_judge_is_happy() -> None:
+    """A question about a drug that does not exist: best passage 0.21."""
+    from api.server import weak_evidence_note
+
+    note = weak_evidence_note([{"relevance": r} for r in (0.21, 0.18, 0.17)])
+    assert note is not None and "None of the passages" in note["text"]
+    assert weak_evidence_note([]) is not None
+
+
+def test_one_strong_passage_is_enough() -> None:
+    """The sitagliptin dosing table, found and ranked first: no warning."""
+    from api.server import weak_evidence_note
+
+    assert weak_evidence_note([{"relevance": r} for r in (0.72, 0.69, 0.19, 0.15)]) is None
+
+
+def test_citations_use_the_page_printed_in_the_book() -> None:
+    """DiPiro's PDF index runs 36 pages ahead of its printed numbers."""
+    from api.server import build_citations
+
+    dipiro = FakeDoc("x", {"page": 1651, "page_label": "1615", "relevance_score": 0.9})
+    rxprep = FakeDoc("y", {"page": 604, "book": "rxprep", "relevance_score": 0.9})
+    assert [c["page"] for c in build_citations([dipiro, rxprep])] == ["p. 1615", "p. 604"]
+    assert format_passages([dipiro]).startswith("[1] DiPiro's Pharmacotherapy 12e, p. 1615")

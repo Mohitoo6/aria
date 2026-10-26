@@ -73,6 +73,7 @@ from agents.guardrail_agent import Intent
 from graph.aria_graph import stream_aria
 from graph.state import AriaFailure
 from llm.errors import AriaStageError, wrap_provider_error
+from llm.generator import printed_page
 from llm.preflight import PreflightReport, run_preflight
 from vectorstore.qdrant_store import StoreReport, check_store
 
@@ -296,7 +297,7 @@ def build_citations(chunks: list[Any]) -> list[dict[str, Any]]:
         snippet = re.sub(r"\s+", " ", (getattr(doc, "page_content", "") or "")).strip()
         if len(snippet) > 360:
             snippet = snippet[:357].rstrip() + "…"
-        page = meta.get("page", "?")
+        page = printed_page(meta) or "?"
         # Provenance: chunks ingested with a `book` tag (RxPrep); DiPiro
         # predates the tag, so default to it when absent.
         book = meta.get("book", "dipiro")
@@ -387,6 +388,30 @@ def low_confidence_note(confidence: float) -> dict[str, str]:
     }
 
 
+#: Below this, even the best retrieved passage is a poor match for the
+#: question. Calibrated on rerank-v5.0 scores: across 39 answerable
+#: retrieval-eval questions the best passage never scored below 0.67, while
+#: for questions about drugs that do not exist it never scored above 0.21.
+#: Retrieval strength and answer faithfulness are different facts — the
+#: Judge can rightly score a faithful answer built on thin passages highly —
+#: and the reader is owed both.
+STRONG_PASSAGE = 0.5
+
+
+def weak_evidence_note(citations: list[dict[str, Any]]) -> dict[str, str] | None:
+    best = max((c["relevance"] for c in citations), default=0.0)
+    if best >= STRONG_PASSAGE:
+        return None
+    return {
+        "kind": "caution",
+        "text": (
+            "None of the passages ARIA retrieved closely matches this question, so "
+            "the textbooks may not cover it directly. Check the cited passages before "
+            "relying on this answer."
+        ),
+    }
+
+
 async def run_consultation(query: str, history: list[Turn] | None = None) -> AsyncIterator[str]:
     """Drive the graph and translate its events into SSE.
 
@@ -456,7 +481,11 @@ async def run_consultation(query: str, history: list[Turn] | None = None) -> Asy
         return
 
     confidence = final["confidence"]
+    citations = build_citations(final["chunks"])
     safety = [CAUTION_NOTE]
+    weak = weak_evidence_note(citations)
+    if weak is not None:
+        safety.insert(0, weak)
     if confidence is not None and confidence < LOW_CONFIDENCE:
         safety.insert(0, low_confidence_note(confidence))
     yield sse(
@@ -464,7 +493,7 @@ async def run_consultation(query: str, history: list[Turn] | None = None) -> Asy
             "type": "meta",
             "evidenceTier": tier_from_confidence(confidence) if confidence is not None else None,
             "confidence": confidence,
-            "citations": build_citations(final["chunks"]),
+            "citations": citations,
             "safety": safety,
         }
     )

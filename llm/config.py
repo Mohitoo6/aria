@@ -65,7 +65,13 @@ class Role(StrEnum):
 DEFAULT_GENERATOR_MODEL: Final = "openai/gpt-oss-120b"
 DEFAULT_SMALL_MODEL: Final = "openai/gpt-oss-20b"
 DEFAULT_FALLBACK_MODEL: Final = "openai/gpt-oss-20b"
-DEFAULT_RERANK_MODEL: Final = "rerank-english-v3.0"
+# rerank-english-v3.0 ranked a bivalirudin passage first for "Can
+# sitagliptin be used in renal impairment?"; every newer Cohere reranker put
+# the sitagliptin dosing table first. On the retrieval eval (same 39
+# questions, hybrid collection) v5.0-fast raised hit rate 92% -> 97% and MRR
+# 0.79 -> 0.86 at the same latency (~0.45 s); v5.0-pro scored within noise
+# of it, so the cheaper model was kept.
+DEFAULT_RERANK_MODEL: Final = "rerank-v5.0-fast"
 # The offline eval judge is deliberately a different model family from the
 # app's own Judge (gpt-oss), so the suite is not one family grading itself —
 # LLM judges measurably favour their own family's output. qwen3.8, unlike
