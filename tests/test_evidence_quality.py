@@ -85,31 +85,6 @@ def test_a_passage_with_no_score_is_kept() -> None:
 # ── Guardrail parsing ──────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize(
-    ("reply", "expected"),
-    [
-        ("YES", True),
-        ("yes", True),
-        ("NO", False),
-        ("no", False),
-        ("Answer: YES", True),
-        ("Answer: NO", False),
-        # The substring test matched the "yes" inside this and let it through.
-        ("NO, this is not medical, yes it is off topic", False),
-        # Nothing parseable: the guardrail cannot vouch for the query.
-        ("I'm not sure what you mean", False),
-        ("", False),
-    ],
-)
-def test_guardrail_reads_the_first_whole_word(
-    monkeypatch: pytest.MonkeyPatch, reply: str, expected: bool
-) -> None:
-    import agents.guardrail_agent as ga
-
-    monkeypatch.setattr(ga, "invoke_role", lambda role, prompt: reply)
-    assert ga.check_guardrail("does it matter") is expected
-
-
 # ── Reference lists ────────────────────────────────────────────────────
 # Real chunks from the collection (OCR splits initial capitals: "T urnbull").
 

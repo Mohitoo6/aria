@@ -22,6 +22,7 @@ from pydantic import ValidationError
 
 from agents import context_agent
 from agents.context_agent import resolve_followup
+from agents.guardrail_agent import Intent
 from api.server import (
     MAX_HISTORY_TURNS,
     MAX_QUERY_CHARS,
@@ -47,9 +48,9 @@ def pipeline(monkeypatch: pytest.MonkeyPatch, chunks: list[Any]) -> dict[str, li
 
     seen: dict[str, list[str]] = {"guardrail": [], "navigator": [], "generator": []}
 
-    def guard(q: str) -> bool:
+    def guard(q: str) -> Intent:
         seen["guardrail"].append(q)
-        return True
+        return Intent.CLINICAL
 
     def nav(q: str) -> list[Any]:
         seen["navigator"].append(q)
@@ -59,7 +60,7 @@ def pipeline(monkeypatch: pytest.MonkeyPatch, chunks: list[Any]) -> dict[str, li
         seen["generator"].append(q)
         return iter(["Thiazides are first-line [[1]].", " ACE inhibitors help [[2]]."])
 
-    monkeypatch.setattr("graph.nodes.check_guardrail", guard)
+    monkeypatch.setattr("graph.nodes.classify_query", guard)
     monkeypatch.setattr("graph.nodes.navigator", nav)
     monkeypatch.setattr("graph.nodes.stream_answer", gen)
     monkeypatch.setattr("graph.nodes.judge_answer", lambda q, a, c: Judgment(0.9, "ok"))
@@ -187,7 +188,7 @@ async def test_first_question_reports_no_rewrite(pipeline: dict[str, list[str]])
 
 @pytest.mark.asyncio
 async def test_refusal_carries_no_grade(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("graph.nodes.check_guardrail", lambda q: False)
+    monkeypatch.setattr("graph.nodes.classify_query", lambda q: Intent.OUT_OF_SCOPE)
     events = await collect("What is the price of Bitcoin?")
     meta = next(e for e in events if e["type"] == "meta")
     assert meta["outOfScope"] is True

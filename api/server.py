@@ -69,6 +69,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from agents.context_agent import MAX_TURN_CHARS, Turn
+from agents.guardrail_agent import Intent
 from graph.aria_graph import stream_aria
 from graph.state import AriaFailure
 from llm.errors import AriaStageError, wrap_provider_error
@@ -329,6 +330,19 @@ SCOPE_NOTE = {
         "Pharmacotherapy and the RxPrep NAPLEX Course Book."
     ),
 }
+SUPPORT_NOTE = {
+    "kind": "support",
+    "text": "Tele-MANAS (India): 14416 — free, confidential, open 24 hours. Emergency: 112.",
+}
+
+#: Notes shown under each kind of refusal. A refusal to help harm someone
+#: carries none: its reply says everything that needs saying.
+REFUSAL_NOTES: dict[str, list[dict[str, str]]] = {
+    Intent.OUT_OF_SCOPE: [SCOPE_NOTE],
+    Intent.SELF_HARM: [SUPPORT_NOTE],
+    Intent.HARM_OTHERS: [],
+}
+
 CAUTION_NOTE = {
     "kind": "caution",
     "text": (
@@ -403,7 +417,8 @@ async def run_consultation(query: str, history: list[Turn] | None = None) -> Asy
         yield sse({"type": "done"})
         return
 
-    if not final["is_medical"]:
+    intent = final["intent"]
+    if intent != Intent.CLINICAL:
         # A refusal is not an answer, so it gets no grounding tier and no
         # score — a "low certainty" badge on "that is outside my scope"
         # claimed the refusal had been graded, and graded badly.
@@ -413,8 +428,9 @@ async def run_consultation(query: str, history: list[Turn] | None = None) -> Asy
                 "evidenceTier": None,
                 "confidence": None,
                 "citations": [],
-                "safety": [SCOPE_NOTE],
+                "safety": REFUSAL_NOTES.get(intent, [SCOPE_NOTE]),
                 "outOfScope": True,
+                "refusal": intent,
             }
         )
         yield sse({"type": "done"})
