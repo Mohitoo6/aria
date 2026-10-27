@@ -171,7 +171,9 @@ def run(questions: list[dict[str, Any]]) -> dict[str, Any]:
                 "candidate_hit": candidate_hit,
                 "rank_after_rerank": rank,
                 "kept": len(kept),
-                "kept_scores": [round(float(d.metadata.get("relevance_score", 0)), 3) for d in kept],
+                "kept_scores": [
+                    round(float(d.metadata.get("relevance_score", 0)), 3) for d in kept
+                ],
             }
         )
         print(
