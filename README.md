@@ -9,7 +9,7 @@ questions strictly from the textbook evidence — with an inline citation on eve
 claim, an independently judged grounding score on every answer, and follow-up
 questions understood in context.
 
-[**▶ Live demo**](https://mohitrks-aria.hf.space) · [How it works](#how-it-works) · [Evaluation](#evaluation) · [Design decisions](#design-decisions) · [Getting started](#getting-started)
+[**▶ Live demo**](https://rks0612-aria.hf.space) · [How it works](#how-it-works) · [Evaluation](#evaluation) · [Design decisions](#design-decisions) · [Getting started](#getting-started)
 
 [![CI](https://github.com/Mohitoo6/aria/actions/workflows/ci.yml/badge.svg)](https://github.com/Mohitoo6/aria/actions/workflows/ci.yml)
 
@@ -470,7 +470,7 @@ verdict is constrained to valid JSON rather than parsed out of prose.
 
 **Deployment.** The included `Dockerfile` builds the frontend and serves API + UI
 from a single container on port 7860 — the exact image running on
-[Hugging Face Spaces](https://mohitrks-aria.hf.space). Runtime dependencies are
+[Hugging Face Spaces](https://rks0612-aria.hf.space). Runtime dependencies are
 pinned in `requirements-space.txt`, so a rebuild for an unrelated change cannot
 pick up a breaking upstream release; `requirements.txt` adds the ingestion and
 restore tooling.

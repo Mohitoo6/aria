@@ -18,7 +18,7 @@ not a degradation.
 ## 1. Confirm it is the evidence base
 
 ```bash
-curl -s https://mohitrks-aria.hf.space/api/health | python3 -m json.tool
+curl -s https://rks0612-aria.hf.space/api/health | python3 -m json.tool
 ```
 
 `models.ok: true` with `evidenceBase.ok: false` means the LLM provider is
@@ -88,7 +88,7 @@ On the Hugging Face Space → **Settings → Variables and secrets**, update
 ## 5. Verify
 
 ```bash
-curl -s https://mohitrks-aria.hf.space/api/health | python3 -m json.tool
+curl -s https://rks0612-aria.hf.space/api/health | python3 -m json.tool
 ```
 
 `status: "ok"` and `evidenceBase.points: 31228`. Then ask a real clinical
