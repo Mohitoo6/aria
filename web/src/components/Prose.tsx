@@ -296,7 +296,7 @@ export function Prose({ content, streaming }: { content: string; streaming?: boo
               return (
                 <h4
                   key={bi}
-                  className="mb-1.5 mt-5 font-display text-[1.1rem] font-semibold leading-snug tracking-tight2 text-ink first:mt-0"
+                  className="head mb-2 mt-6 border-t border-rule/30 pt-2.5 text-[1.3rem] leading-[0.95] text-ink first:mt-0 first:border-t-0 first:pt-0 sm:text-[1.4rem]"
                 >
                   {renderInline(b.text, `h-${bi}`)}
                 </h4>
@@ -422,10 +422,10 @@ function ClinicalTable({
   return (
     <figure className="my-5">
       <figcaption className="label mb-1.5">Table {number}</figcaption>
-      <div className="overflow-x-auto rounded-[10px] border border-line bg-surface/40">
+      <div className="overflow-x-auto rounded-[2px] border border-rule/40 bg-surface/40">
         <table className="w-full border-collapse text-[0.88rem]">
           <thead>
-            <tr className="border-b border-line-strong/60 bg-surface/70">
+            <tr className="border-b border-rule/60 bg-surface/80">
               {table.header.map((h, i) => (
                 <th
                   key={i}
