@@ -73,6 +73,9 @@ const INLINE =
   per passage.
 */
 const MARKER_RUN = /\]\]\s*\[\[/g;
+
+/** `**Background:**` (or `**Background**:`) opening a blockquote. */
+const BACKGROUND = /^\s*\*\*Background:?\*\*:?\s*/i;
 // The generator writes "occurs [[5]]." — a superscript sits against its
 // word, so the space before it goes.
 const SPACE_BEFORE_MARKER = /\s+(?=\[\[\d)/g;
@@ -336,7 +339,32 @@ export function Prose({ content, streaming }: { content: string; streaming?: boo
               </ol>
             );
 
-          case 'quote':
+          case 'quote': {
+            // `> **Background:** …` is general explanation the generator is
+            // allowed to add from its own knowledge — never a clinical fact,
+            // never cited. It must not look like evidence, so it is set apart
+            // and says plainly where it comes from.
+            const first = b.paragraphs[0] ?? '';
+            const bg = first.match(BACKGROUND);
+            if (bg) {
+              const paragraphs = [first.slice(bg[0].length), ...b.paragraphs.slice(1)].filter(
+                (p) => p.trim(),
+              );
+              return (
+                <aside
+                  key={bi}
+                  aria-label="General background, not from the textbooks"
+                  className="my-4 rounded-[2px] border border-dashed border-rule/35 bg-surface/50 px-3.5 py-2.5"
+                >
+                  <span className="label mb-1 block">General background · not from the textbooks</span>
+                  {paragraphs.map((para, pi) => (
+                    <p key={pi} className="my-1 text-[0.92em] italic leading-relaxed text-ink-soft">
+                      {renderInline(para, `bg-${bi}-${pi}`)}
+                    </p>
+                  ))}
+                </aside>
+              );
+            }
             return (
               <blockquote
                 key={bi}
@@ -349,6 +377,7 @@ export function Prose({ content, streaming }: { content: string; streaming?: boo
                 ))}
               </blockquote>
             );
+          }
 
           case 'table': {
             tableNo += 1;
